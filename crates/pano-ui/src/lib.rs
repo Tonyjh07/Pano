@@ -1,4 +1,4 @@
-//! Pano 图形界面（egui）。
+//! Pano 图形界面（egui）：多窗口 + 托盘常驻。
 //!
 //! 依赖方向铁律：`pano-ui` 只读 `pano-core` 的公共 API，不知道具体适配器。
 //! UI 通过 `UISpec` 声明所需能力，由 `pano-app` 启动时校验（架构 §7）。
@@ -11,9 +11,13 @@ use pano_core::lifecycle::Lifecycle;
 use pano_core::sample_store::SampleStore;
 
 pub mod app;
+pub mod components;
+pub mod icon;
 pub mod pages;
 pub mod theme;
+pub mod tray;
 pub mod widgets;
+pub mod windows;
 
 /// 本 UI 声明所需的能力（架构 §7）。
 ///
@@ -22,11 +26,12 @@ pub fn uispec() -> UISpec {
     UISpec::requires([Capability::new(Capability::TIME_SERIES)])
 }
 
-/// 构建 UI 应用。
+/// 构建 UI 应用（内部创建系统托盘；失败降级为无托盘模式）。
 pub fn build_app(
+    cc: &eframe::CreationContext<'_>,
     core: Arc<Mutex<Lifecycle>>,
     store: Arc<SampleStore>,
     config_path: PathBuf,
 ) -> app::PanoApp {
-    app::PanoApp::new(core, store, config_path)
+    app::PanoApp::new(cc, core, store, config_path)
 }

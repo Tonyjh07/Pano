@@ -11,15 +11,25 @@ Pano 以**监控面板**为主要用途，同时可扩展为其他「信息采�
 
 - workspace 四个 crate（core / adapters / ui / app）；
 - 示例适配器 `example.counter`（递增计数）与 `example.sine`（正弦波），feature 开关可替换；
-- egui 界面：仪表盘（数值卡 + 实时曲线）、适配器管理页（启停 / 采样间隔热生效、schema 驱动表单）；
 - 适配器一致性测试基座，两个示例适配器全部通过。
+
+🪟 **M1.1 UI 多窗口 + 托盘常驻完成**：
+
+- **多窗口**：管理窗口（适配器 + 设置页签）+ 每个 series 一个独立监控组件窗口；
+- **托盘常驻**：应用驻留系统托盘，关闭窗口 = 隐藏不退出，托盘菜单可打开 / 聚焦窗口、退出应用；
+- **组件级窗口自由**：每个监控窗口可独立置顶 / 全屏（运行期切换）；
+- **图标**：应用窗口图标与托盘图标（`pano-ui/assets/pano_icon.png`）。
 
 ## 快速开始
 
 ```bash
-cargo run -p pano-app                # GUI 模式
+cargo run -p pano-app                # GUI 模式（多窗口 + 托盘常驻）
 cargo run -p pano-app -- --headless  # 无头验证模式（跑 3 秒后退出）
 ```
+
+GUI 模式下应用常驻系统托盘：关闭任意窗口仅隐藏；托盘菜单「退出」才结束进程
+（无托盘环境下关闭窗口即退出）。当前托盘在 Windows / macOS 可用；
+Linux 需 `tray-icon` 的 gtk 后端（默认未启用，M3 打包时补齐）。
 
 配置文件 `pano.toml`（不入库）参考 [`pano.toml.example`](pano.toml.example)；
 换适配器 = 改 feature 重新编译，如：

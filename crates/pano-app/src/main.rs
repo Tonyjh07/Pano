@@ -6,7 +6,7 @@
 //! 3. 组装 lifecycle（未知适配器 id 在此暴露）；
 //! 4. 能力校验：UI 声明 ⊆ 已启用适配器的能力并集；
 //! 5. 启动全部启用中的适配器；
-//! 6. headless 模式跑固定时长后干净退出；GUI 模式挂载界面（P5）。
+//! 6. headless 模式跑固定时长后干净退出；GUI 模式挂载多窗口界面（M1.1）。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -96,15 +96,17 @@ fn run_headless(lifecycle: &mut Lifecycle, seconds: u64) -> Result<()> {
     Ok(())
 }
 
-/// GUI 模式：挂载 egui 界面（M1 P5）。
+/// GUI 模式：挂载 egui 界面（M1.1：多窗口 + 托盘常驻，托盘「退出」才结束进程）。
 fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
     let core = Arc::new(Mutex::new(lifecycle));
     let store = core.lock().unwrap_or_else(|e| e.into_inner()).store_arc();
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
+            .with_title("Pano 管理")
             .with_inner_size([1100.0, 720.0])
-            .with_min_inner_size([800.0, 500.0]),
+            .with_min_inner_size([800.0, 500.0])
+            .with_icon(pano_ui::icon::app_icon()),
         ..Default::default()
     };
 
@@ -115,6 +117,7 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
         Box::new(move |cc| {
             pano_ui::theme::setup_fonts(&cc.egui_ctx);
             Ok(Box::new(pano_ui::build_app(
+                cc,
                 core_for_ui,
                 store,
                 config_path,
@@ -122,7 +125,7 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
         }),
     );
 
-    // 窗口已关闭：停止适配器（先停任务，再退进程）
+    // 托盘「退出」或全部窗口关闭后：停止适配器（先停任务，再退进程）
     if let Ok(mut lc) = core.lock() {
         lc.stop_all();
     }
