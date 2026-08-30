@@ -1,0 +1,18 @@
+[package]
+name = "pano-adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pano 内置适配器集合，每适配器一个 feature"
+
+[features]
+# M1 默认启用示例适配器（spec §5）；M2 起默认系统监控适配器
+default = ["adapter-example-counter", "adapter-example-sine"]
+adapter-example-counter = []
+adapter-example-sine = []
+
+[dependencies]
+pano-core.workspace = true
+tokio.workspace = true
+tracing.workspace = true

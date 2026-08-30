@@ -1,0 +1,20 @@
+# pano.toml 示例模板（复制为 pano.toml 后按需修改）
+# pano.toml 为本地配置，不入库；本模板入库供参考。
+
+schema_version = 1
+
+[core]
+# 默认采样周期（毫秒）
+sampling_ms = 500
+
+# 每个适配器一段；固定字段：enabled、sampling；其余为该适配器自定义字段
+[adapters."example.counter"]
+enabled = true
+sampling = 200
+step = 1.5
+
+[adapters."example.sine"]
+enabled = true
+sampling = 200
+amplitude = 1.0
+frequency = 1.0
