@@ -1,0 +1,25 @@
+[package]
+name = "pano-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pano 二进制入口：组装 core + adapters + ui"
+
+# 透传适配器 feature 到 pano-adapters（spec §5）：
+# 用户通过 `cargo build --features ...` 决定打进哪些适配器
+[features]
+default = ["adapter-example-counter", "adapter-example-sine"]
+adapter-example-counter = ["pano-adapters/adapter-example-counter"]
+adapter-example-sine = ["pano-adapters/adapter-example-sine"]
+
+[dependencies]
+pano-core.workspace = true
+pano-adapters.workspace = true
+pano-ui.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+eframe = "0.36.1"

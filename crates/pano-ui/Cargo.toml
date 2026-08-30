@@ -1,0 +1,13 @@
+[package]
+name = "pano-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pano egui 界面：页面、组件、主题；声明 UISpec"
+
+[dependencies]
+eframe = "0.36.1"
+egui_plot = "0.37"
+pano-core.workspace = true
+tracing.workspace = true

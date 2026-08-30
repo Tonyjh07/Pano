@@ -1,0 +1,15 @@
+[package]
+name = "pano-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pano 核心编排层：适配器注册表、生命周期、样本存储、配置、能力匹配"
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"

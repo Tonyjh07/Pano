@@ -44,17 +44,13 @@
 | `AdapterStatus` | `Disabled / Stopped / Starting / Running / Error` |
 | `UISpec` | UI 声明所需能力的清单（§7） |
 
-## 3. Adapter trait（接口草案，非最终实现）
+## 3. Adapter trait（M1 定稿）
 
 ```rust
-// —— 仅作设计参考，M1 落地时定稿 ——
-
 pub trait Adapter: Send + Sync {
-    fn id(&self) -> AdapterId;                      // 唯一 id
-    fn meta(&self) -> AdapterMeta;                  // 名称、描述、版本
+    fn meta(&self) -> AdapterMeta;                  // 元信息（含唯一 id）
     fn capabilities(&self) -> Vec<Capability>;      // 提供的能力
-    fn config_schema(&self) -> ConfigSchema;        // 供管理界面渲染表单
-
+    fn config_schema(&self) -> ConfigSchema;        // 自定义配置 schema（渲染表单）
     fn start(&mut self, ctx: AdapterContext) -> Result<(), AdapterError>;
     fn stop(&mut self) -> Result<(), AdapterError>;
     fn status(&self) -> AdapterStatus;
@@ -63,8 +59,17 @@ pub trait Adapter: Send + Sync {
 
 `AdapterContext` 提供给适配器：
 
-- `sink: SampleSink` —— 推送样本；
-- `sampling: Duration` —— 本适配器采样周期（由配置决定）。
+- `sink: SampleSink` —— 推送样本（可 clone、多线程安全）；
+- `sampling: Duration` —— 本适配器采样周期（由配置决定）；
+- `runtime: tokio::runtime::Handle` —— 适配器在 `start` 内据此自建采集任务；
+- `config: HashMap<String, ConfigValue>` —— 自定义配置（pano.toml 解析而来）。
+
+`ConfigSchema` 只描述**自定义字段**；`enabled` / `sampling` 为 core 固定字段，不进 schema。
+
+与草案的差异（M1 落地定稿）：
+
+- 独立 `id()` 并入 `meta()`，避免两处 id 不一致；
+- `AdapterContext` 增加 `runtime`（tokio Handle）与 `config`。
 
 设计要点：
 
@@ -162,32 +167,35 @@ pub struct UISpec {
 | 换 UI | 新 crate 声明 UISpec，用 core 只读 API 重写界面 | 不动 core / adapters |
 | 增新页面 | 在 pano-ui 内加页面组件 | 不动其他 crate |
 
-## 11. 目录结构（设计阶段占位，M1 落地）
+## 11. 目录结构（M1 已落地）
 
 ```
 pano/
 ├── Cargo.toml                    # workspace
-├── rust-toolchain.toml
+├── rust-toolchain.toml           # 固定 stable 工具链
+├── pano.toml.example             # 配置模板（pano.toml 本地配置不入库）
 ├── crates/
 │   ├── pano-core/src/
 │   │   ├── lib.rs
-│   │   ├── adapter.rs            # Adapter trait、AdapterContext、状态
+│   │   ├── adapter.rs            # Adapter trait、AdapterContext、状态、错误
+│   │   ├── capability.rs         # Capability、UISpec
+│   │   ├── error.rs              # CoreError
 │   │   ├── registry.rs
-│   │   ├── lifecycle.rs
+│   │   ├── lifecycle.rs          # 启停、状态、能力校验、热生效
 │   │   ├── sample_store.rs       # 环形缓冲
-│   │   ├── capability.rs
-│   │   ├── config.rs
+│   │   ├── config.rs             # pano.toml 解析 / 校验 / 序列化
 │   │   └── test_harness.rs       # 适配器一致性测试基座
 │   ├── pano-adapters/src/
 │   │   ├── lib.rs                # build()：按 feature 收集
 │   │   ├── example_counter.rs    # feature: adapter-example-counter
 │   │   └── example_sine.rs       # feature: adapter-example-sine
 │   ├── pano-ui/src/
-│   │   ├── lib.rs                # UISpec 声明 + App 组装
+│   │   ├── lib.rs                # UISpec 声明 + build_app
+│   │   ├── app.rs                # PanoApp（侧边栏 / 状态栏 / 重绘节流）
+│   │   ├── theme.rs              # 暗色主题 + 中文字体
 │   │   ├── pages/                # dashboard / adapters / settings
-│   │   ├── widgets/              # panel、sparkline、status_badge
-│   │   └── theme.rs
-│   └── pano-app/src/main.rs      # 启动流程编排
+│   │   └── widgets/              # status_badge 等
+│   └── pano-app/src/main.rs      # 启动流程编排（GUI / headless）
 └── docs/
 ```
 
