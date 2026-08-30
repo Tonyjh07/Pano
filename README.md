@@ -20,6 +20,7 @@ Pano 以**监控面板**为主要用途，同时可扩展为其他「信息采�
 
 ## 文档索引
 
+- [`AGENTS.md`](AGENTS.md) —— 核心开发与测试规范（代理工作指南，含提交审查 / 合并确认流程）
 - [`docs/spec.md`](docs/spec.md) —— 规范设计：workspace 组织、命名、错误、日志、配置、测试、依赖、版本
 - [`docs/architecture.md`](docs/architecture.md) —— 架构设计：分层、Adapter trait、数据流、线程模型、可替换性
 - [`docs/ui.md`](docs/ui.md) —— 图形界面设计：布局、页面、组件、主题、渲染策略
