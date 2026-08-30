@@ -268,6 +268,12 @@ pub struct AdapterContext {
 /// - 适配器**自持状态**，core 不假设其内部实现（单任务或多任务均可）；
 /// - `start` 返回即视为已开始，适配器负责在 tokio 上自建任务循环；
 /// - `stop` 必须干净退出（任务 join、资源释放）。
+///
+/// `stop` 语义（一致性测试基座依赖）：
+/// - `stop` 返回后**不得再产出样本**——实现应在返回前等待任务真正结束
+///   （如 `abort` 后 `block_on` join）；
+/// - `stop` 会在调用线程**阻塞**至任务结束：调用方不得处于 tokio 异步上下文，
+///   且运行时须存活（生命周期保证：`stop_all` 先于 runtime drop）。
 pub trait Adapter: Send + Sync {
     /// 元信息（含唯一 id）。
     fn meta(&self) -> AdapterMeta;

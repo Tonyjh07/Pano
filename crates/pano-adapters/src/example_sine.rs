@@ -24,6 +24,7 @@ const PHASE_STEP_PER_SAMPLE: f64 = 0.1;
 pub struct ExampleSine {
     status: AdapterStatus,
     task: Option<tokio::task::JoinHandle<()>>,
+    runtime: Option<tokio::runtime::Handle>,
 }
 
 impl ExampleSine {
@@ -32,6 +33,7 @@ impl ExampleSine {
         Self {
             status: AdapterStatus::Stopped,
             task: None,
+            runtime: None,
         }
     }
 
@@ -117,6 +119,7 @@ impl Adapter for ExampleSine {
         let sink = ctx.sink.clone();
         let sampling = ctx.sampling;
         let series = SeriesId::new(&self.meta().id, METRIC);
+        self.runtime = Some(ctx.runtime.clone());
         self.task = Some(ctx.runtime.spawn(async move {
             let mut ticker = tokio::time::interval(sampling);
             let mut phase = 0.0_f64;
@@ -142,6 +145,11 @@ impl Adapter for ExampleSine {
     fn stop(&mut self) -> Result<(), AdapterError> {
         if let Some(task) = self.task.take() {
             task.abort();
+            // abort 是异步的：阻塞等待任务真正结束，保证 stop 返回后不再产出样本
+            //（一致性测试「生命周期检查」依赖此语义）。
+            if let Some(rt) = &self.runtime {
+                let _ = rt.block_on(task);
+            }
         }
         self.status = AdapterStatus::Stopped;
         tracing::info!(target: "pano::adapters::example_sine", "适配器已停止");
