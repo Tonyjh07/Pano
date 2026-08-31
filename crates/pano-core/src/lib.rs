@@ -10,5 +10,6 @@ pub mod error;
 pub mod http;
 pub mod lifecycle;
 pub mod registry;
+pub mod retry;
 pub mod sample_store;
 pub mod test_harness;
