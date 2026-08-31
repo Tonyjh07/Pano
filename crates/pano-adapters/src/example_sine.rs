@@ -6,7 +6,6 @@
 //!   - `frequency`（Number，默认 1.0，必须 > 0；单位：弧度每采样）
 
 use std::collections::HashMap;
-use std::time::SystemTime;
 
 use pano_core::adapter::{
     Adapter, AdapterContext, AdapterError, AdapterMeta, AdapterStatus, ConfigField, ConfigSchema,
@@ -130,7 +129,7 @@ impl Adapter for ExampleSine {
                 sink.push(
                     series.clone(),
                     Sample {
-                        timestamp: SystemTime::now(),
+                        timestamp: pano_core::adapter::now(),
                         value: SampleValue::Number(value),
                     },
                 );

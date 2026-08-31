@@ -47,6 +47,7 @@ pub fn run_all(
         sampling,
         runtime: rt.handle().clone(),
         config: valid_config,
+        http: None,
     };
     adapter
         .start(ctx)
@@ -107,6 +108,7 @@ pub fn run_all(
         sampling,
         runtime: rt.handle().clone(),
         config: invalid_config,
+        http: None,
     };
     match adapter.start(ctx2) {
         Err(AdapterError::Config(_)) => {

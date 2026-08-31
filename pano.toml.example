@@ -18,3 +18,10 @@ enabled = true
 sampling = 200
 amplitude = 1.0
 frequency = 1.0
+
+# 窗口布局持久化（由窗口服务读写，见架构 §13）；每窗口一段，id 与组件 id 一致
+# position / size 为逻辑像素；monitor 为显示器序列化标识（如 "primary" / 自定义编号）
+# [window."counter-chart"]
+# position = [120.0, 80.0]
+# size = [480.0, 320.0]
+# monitor = "primary"

@@ -3,13 +3,15 @@
 //! 结构（见 spec §7 / AGENTS §2.6）：
 //! - `schema_version`：配置 schema 版本；
 //! - `[core]`：全局默认（如默认采样周期）；
-//! - `[adapters.<id>]`：固定字段 `enabled`、`sampling`，其余为该适配器自定义字段。
+//! - `[adapters.<id>]`：固定字段 `enabled`、`sampling`，其余为该适配器自定义字段；
+//! - `[window.<id>]`：布局持久化（位置 / 大小 / 所在显示器，由窗口服务读写）。
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::ConfigValue;
+use crate::capability::{is_valid_adapter_id, is_valid_component_id};
 use crate::error::CoreError;
 
 /// 当前支持的配置 schema 版本。
@@ -27,6 +29,23 @@ pub struct PanoConfig {
     pub core: CoreConfig,
     #[serde(default)]
     pub adapters: HashMap<String, AdapterConfig>,
+    /// 窗口布局持久化（`[window.<id>]` 段，架构 §13）。
+    #[serde(default, rename = "window")]
+    pub windows: HashMap<String, WindowLayout>,
+}
+
+/// 单个窗口的布局持久化段（`[window.<id>]`）。
+///
+/// `monitor` 为字符串序列化形式（如 `"primary"` / 自定义编号），
+/// 与 [`crate::capability::WindowSpec`] 的 `monitor` 字段一致。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WindowLayout {
+    /// 窗口位置（逻辑像素）；缺省 = 居中。
+    pub position: Option<(f64, f64)>,
+    /// 窗口大小（逻辑像素）；缺省 = WindowSpec 初始尺寸。
+    pub size: Option<(f64, f64)>,
+    /// 所在显示器（序列化标识）。
+    pub monitor: Option<String>,
 }
 
 /// `[core]` 全局配置。
@@ -89,7 +108,7 @@ impl PanoConfig {
     /// 校验配置：
     /// - `schema_version` 匹配；
     /// - 采样周期必须大于 0；
-    /// - 适配器 id 满足 `<域>.<名称>` 格式。
+    /// - 适配器 id 满足 `<域>.<名称>` 格式（全小写 ASCII、连字符分隔）。
     pub fn validate(&self) -> Result<(), CoreError> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(CoreError::Config(format!(
@@ -103,14 +122,19 @@ impl PanoConfig {
             ));
         }
         for (id, cfg) in &self.adapters {
-            if !id.contains('.') {
-                return Err(CoreError::Config(format!(
-                    "适配器 id 格式非法（应为 <域>.<名称>）：{id}"
-                )));
+            if !is_valid_adapter_id(id) {
+                return Err(CoreError::InvalidAdapterId(id.clone()));
             }
             if cfg.sampling == Some(0) {
                 return Err(CoreError::Config(format!(
                     "适配器 {id} 的 sampling 必须大于 0"
+                )));
+            }
+        }
+        for id in self.windows.keys() {
+            if !is_valid_component_id(id) {
+                return Err(CoreError::Config(format!(
+                    "[window.<id>] 的窗口 id 格式非法（应为全小写 ASCII、连字符分隔）：{id}"
                 )));
             }
         }
@@ -144,6 +168,23 @@ impl PanoConfig {
             }
         }
         Ok(out)
+    }
+
+    /// 读取某窗口的持久化布局（无记录返回 `None`）。
+    pub fn window_layout(&self, id: &str) -> Option<&WindowLayout> {
+        self.windows.get(id)
+    }
+
+    /// 写入（或移除）某窗口的持久化布局。
+    pub fn set_window_layout(&mut self, id: &str, layout: Option<WindowLayout>) {
+        match layout {
+            Some(l) => {
+                self.windows.insert(id.to_string(), l);
+            }
+            None => {
+                self.windows.remove(id);
+            }
+        }
     }
 }
 
@@ -227,7 +268,7 @@ schema_version = 1
 enabled = true
 "#;
         let err = PanoConfig::parse(text).unwrap_err();
-        assert!(matches!(err, CoreError::Config(_)));
+        assert!(matches!(err, CoreError::InvalidAdapterId(_)));
     }
 
     #[test]
@@ -254,5 +295,63 @@ amplitude = 1.5
                 .get("amplitude"),
             Some(&ConfigValue::Number(1.5))
         );
+    }
+
+    #[test]
+    fn window_layout_segment_parses_and_roundtrips() {
+        let text = r#"
+schema_version = 1
+[window."counter-chart"]
+position = [120.0, 80.0]
+size = [480.0, 320.0]
+monitor = "primary"
+"#;
+        let config = PanoConfig::parse(text).unwrap();
+        let layout = config.window_layout("counter-chart").expect("有布局");
+        assert_eq!(layout.position, Some((120.0, 80.0)));
+        assert_eq!(layout.size, Some((480.0, 320.0)));
+        assert_eq!(layout.monitor.as_deref(), Some("primary"));
+
+        // 写回 → 重新解析一致
+        let mut edited = config.clone();
+        edited.set_window_layout(
+            "counter-chart",
+            Some(WindowLayout {
+                position: Some((1.0, 2.0)),
+                size: None,
+                monitor: None,
+            }),
+        );
+        let reparsed = PanoConfig::parse(&edited.to_toml().unwrap()).unwrap();
+        let layout = reparsed.window_layout("counter-chart").unwrap();
+        assert_eq!(layout.position, Some((1.0, 2.0)));
+        assert_eq!(layout.size, None);
+
+        // 移除布局
+        edited.set_window_layout("counter-chart", None);
+        assert!(edited.window_layout("counter-chart").is_none());
+    }
+
+    #[test]
+    fn reject_invalid_adapter_id_format() {
+        let text = r#"
+schema_version = 1
+[adapters."Bad.Id"]
+enabled = true
+"#;
+        let err = PanoConfig::parse(text).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidAdapterId(_)));
+    }
+
+    #[test]
+    fn reject_invalid_window_id() {
+        // 窗口 id 与组件 id 同规则（全小写 ASCII、连字符分隔）。
+        let text = r#"
+schema_version = 1
+[window."Bad.Id"]
+position = [1.0, 2.0]
+"#;
+        let err = PanoConfig::parse(text).unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)));
     }
 }

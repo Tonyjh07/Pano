@@ -11,6 +11,7 @@ use crate::adapter::{AdapterContext, AdapterId, AdapterMeta, AdapterStatus, Samp
 use crate::capability::UISpec;
 use crate::config::{AdapterConfig, PanoConfig};
 use crate::error::CoreError;
+use crate::http::HttpClient;
 use crate::registry::Registry;
 use crate::sample_store::SampleStore;
 
@@ -20,11 +21,24 @@ pub struct Lifecycle {
     store: Arc<SampleStore>,
     config: PanoConfig,
     runtime: Handle,
+    /// 远程数据源注入（M1.2 R3，架构 §14）：pano-app 按 feature 装配；
+    /// 无远程适配器时为 `None`。
+    http: Option<Arc<dyn HttpClient>>,
 }
 
 impl Lifecycle {
     /// 由注册表与配置构造；配置引用了未注册的适配器 → [`CoreError::UnknownAdapter`]。
     pub fn new(registry: Registry, config: PanoConfig, runtime: Handle) -> Result<Self, CoreError> {
+        Self::with_http(registry, config, runtime, None)
+    }
+
+    /// 同 [`Lifecycle::new`]，并注入远程数据源客户端（架构 §14）。
+    pub fn with_http(
+        registry: Registry,
+        config: PanoConfig,
+        runtime: Handle,
+        http: Option<Arc<dyn HttpClient>>,
+    ) -> Result<Self, CoreError> {
         for id in config.adapters.keys() {
             if registry.get(&AdapterId::new(id.as_str())).is_none() {
                 return Err(CoreError::UnknownAdapter(AdapterId::new(id.as_str())));
@@ -35,6 +49,7 @@ impl Lifecycle {
             store: Arc::new(SampleStore::new()),
             config,
             runtime,
+            http,
         })
     }
 
@@ -101,15 +116,14 @@ impl Lifecycle {
             sampling,
             runtime,
             config: custom,
+            http: self.http.clone(),
         };
 
         let adapter = self
             .registry
             .get_mut(id)
             .ok_or_else(|| CoreError::UnknownAdapter(id.clone()))?;
-        adapter
-            .start(ctx)
-            .map_err(|e| CoreError::Config(format!("{e}")))
+        adapter.start(ctx).map_err(CoreError::Adapter)
     }
 
     /// 停止单个适配器；必须干净退出。
@@ -125,9 +139,7 @@ impl Lifecycle {
             .registry
             .get_mut(id)
             .ok_or_else(|| CoreError::UnknownAdapter(id.clone()))?;
-        adapter
-            .stop()
-            .map_err(|e| CoreError::Config(format!("{e}")))
+        adapter.stop().map_err(CoreError::Adapter)
     }
 
     /// 查询适配器状态；配置未启用 → [`AdapterStatus::Disabled`]。
@@ -162,7 +174,10 @@ impl Lifecycle {
     }
 
     /// 能力校验（架构 §7）：`UISpec.requires ⊆ 已启用适配器的能力并集`。
+    ///
+    /// 同时校验 `UISpec` 自身声明（组件 id 格式 / 唯一性 / series 引用合法）。
     pub fn validate_uispec(&self, spec: &UISpec) -> Result<(), CoreError> {
+        spec.validate()?;
         let mut have: Vec<_> = Vec::new();
         for id in self.registry.ids() {
             if self.config.is_enabled(id.as_str())
@@ -187,7 +202,9 @@ impl Lifecycle {
     /// 应用新配置（热生效）：仅重启受影响适配器。
     ///
     /// 流程：停止（若在运行）→ 更新内存配置 → 启动（若启用）。
-    /// 调用方（app）负责把新配置写回 `pano.toml`。
+    /// **失败回滚**（M1 审查待办）：新配置启动失败时恢复旧配置，
+    /// 并尽力恢复原运行状态，保证内存配置与运行状态一致。
+    /// 调用方（app）负责把新配置写回 `pano.toml`；**收到 `Err` 时不得写回**。
     pub fn apply_adapter_config(
         &mut self,
         id: &AdapterId,
@@ -196,6 +213,11 @@ impl Lifecycle {
         if self.registry.get(id).is_none() {
             return Err(CoreError::UnknownAdapter(id.clone()));
         }
+        if new_cfg.sampling == Some(0) {
+            return Err(CoreError::Config(format!(
+                "适配器 {id} 的 sampling 必须大于 0"
+            )));
+        }
         let running = matches!(
             self.status_of(id),
             AdapterStatus::Running | AdapterStatus::Starting | AdapterStatus::Error { .. }
@@ -203,11 +225,31 @@ impl Lifecycle {
         if running {
             self.stop(id)?;
         }
+        let old_cfg = self.config.adapters.get(id.as_str()).cloned();
         self.config
             .adapters
             .insert(id.as_str().to_string(), new_cfg.clone());
-        if new_cfg.enabled {
-            self.start(id)?;
+        if new_cfg.enabled
+            && let Err(e) = self.start(id)
+        {
+            // 回滚配置与运行状态。
+            match old_cfg {
+                Some(old) => {
+                    self.config.adapters.insert(id.as_str().to_string(), old);
+                }
+                None => {
+                    self.config.adapters.remove(id.as_str());
+                }
+            }
+            if running && let Err(restore_err) = self.start(id) {
+                tracing::warn!(
+                    target: "pano::core",
+                    adapter = %id,
+                    error = %restore_err,
+                    "回滚后恢复运行失败，适配器保持停止（配置已回滚为旧值）"
+                );
+            }
+            return Err(e);
         }
         Ok(())
     }
@@ -217,17 +259,17 @@ impl Lifecycle {
 mod tests {
     use super::*;
     use crate::adapter::{
-        Adapter, AdapterError, AdapterMeta, ConfigSchema, Sample, SampleValue, SeriesId,
+        Adapter, AdapterError, AdapterMeta, ConfigSchema, ConfigValue, Sample, SampleValue,
+        SeriesId,
     };
     use crate::capability::Capability;
     use std::collections::HashMap;
-    use std::time::SystemTime;
 
     struct FakeAdapter {
         id: AdapterId,
         status: AdapterStatus,
         task: Option<tokio::task::JoinHandle<()>>,
-        fail_start: bool,
+        runtime: Option<tokio::runtime::Handle>,
     }
 
     impl FakeAdapter {
@@ -236,7 +278,7 @@ mod tests {
                 id: AdapterId::new(id),
                 status: AdapterStatus::Stopped,
                 task: None,
-                fail_start: false,
+                runtime: None,
             }
         }
     }
@@ -260,13 +302,15 @@ mod tests {
         }
 
         fn start(&mut self, ctx: AdapterContext) -> Result<(), AdapterError> {
-            if self.fail_start {
+            // 测试钩子：自定义配置含 fail=true 时拒绝启动（经公开配置路径触发）。
+            if ctx.config.get("fail") == Some(&ConfigValue::Bool(true)) {
                 return Err(AdapterError::Config("故意失败".into()));
             }
             self.status = AdapterStatus::Running;
             let sink = ctx.sink.clone();
             let sampling = ctx.sampling;
             let series = SeriesId::new(&self.id, "value");
+            self.runtime = Some(ctx.runtime.clone());
             self.task = Some(ctx.runtime.spawn(async move {
                 let mut ticker = tokio::time::interval(sampling);
                 loop {
@@ -274,7 +318,7 @@ mod tests {
                     sink.push(
                         series.clone(),
                         Sample {
-                            timestamp: SystemTime::now(),
+                            timestamp: crate::adapter::now(),
                             value: SampleValue::Number(1.0),
                         },
                     );
@@ -284,8 +328,12 @@ mod tests {
         }
 
         fn stop(&mut self) -> Result<(), AdapterError> {
+            // 阻塞等待任务真正结束（与示例适配器一致），消除 abort-only 竞态。
             if let Some(task) = self.task.take() {
                 task.abort();
+                if let Some(rt) = &self.runtime {
+                    let _ = rt.block_on(task);
+                }
             }
             self.status = AdapterStatus::Stopped;
             Ok(())
@@ -313,6 +361,7 @@ mod tests {
             schema_version: 1,
             core: Default::default(),
             adapters,
+            windows: HashMap::new(),
         }
     }
 
@@ -439,5 +488,130 @@ mod tests {
             }
             other => panic!("期望 CapabilityUnsatisfied，实际 {other:?}"),
         }
+    }
+
+    #[test]
+    fn uispec_rejects_invalid_component_declarations() {
+        let mut reg = Registry::new();
+        reg.register(Box::new(FakeAdapter::new("example.fake")))
+            .unwrap();
+        let rt = runtime();
+        let lc = Lifecycle::new(
+            reg,
+            config_with("example.fake", true, None),
+            rt.handle().clone(),
+        )
+        .unwrap();
+
+        use crate::capability::{ComponentSpec, WindowSpec};
+
+        // 重复组件 id
+        let dup = UISpec {
+            requires: vec![],
+            components: vec![
+                ComponentSpec {
+                    id: "chart-a".into(),
+                    series: vec![SeriesId::new(&AdapterId::new("example.fake"), "value")],
+                    window: WindowSpec::default(),
+                },
+                ComponentSpec {
+                    id: "chart-a".into(),
+                    series: vec![SeriesId::new(&AdapterId::new("example.fake"), "value")],
+                    window: WindowSpec::default(),
+                },
+            ],
+        };
+        assert!(lc.validate_uispec(&dup).is_err());
+
+        // 非法组件 id
+        let bad_id = UISpec {
+            requires: vec![],
+            components: vec![ComponentSpec {
+                id: "Bad_Id".into(),
+                series: vec![],
+                window: WindowSpec::default(),
+            }],
+        };
+        assert!(lc.validate_uispec(&bad_id).is_err());
+
+        // 合法组件声明（含无 series 的空组件也允许，建窗时再过滤数据源）
+        let ok = UISpec {
+            requires: vec![],
+            components: vec![ComponentSpec {
+                id: "chart-b".into(),
+                series: vec![SeriesId::new(&AdapterId::new("example.fake"), "value")],
+                window: WindowSpec {
+                    title: "测试".into(),
+                    size: (480.0, 320.0),
+                    ..WindowSpec::default()
+                },
+            }],
+        };
+        assert!(lc.validate_uispec(&ok).is_ok());
+    }
+
+    #[test]
+    fn apply_config_rejects_zero_sampling() {
+        let mut reg = Registry::new();
+        reg.register(Box::new(FakeAdapter::new("example.fake")))
+            .unwrap();
+        let rt = runtime();
+        let mut lc = Lifecycle::new(
+            reg,
+            config_with("example.fake", true, None),
+            rt.handle().clone(),
+        )
+        .unwrap();
+
+        let mut bad = AdapterConfig::default_enabled();
+        bad.sampling = Some(0);
+        let err = lc
+            .apply_adapter_config(&AdapterId::new("example.fake"), bad)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)));
+        // 未触碰运行状态：适配器保持停止（从未启动过），配置保持原样。
+        assert_eq!(
+            lc.status_of(&AdapterId::new("example.fake")),
+            AdapterStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn apply_config_rolls_back_on_start_failure() {
+        let mut reg = Registry::new();
+        reg.register(Box::new(FakeAdapter::new("example.fake")))
+            .unwrap();
+        let rt = runtime();
+        let mut lc = Lifecycle::new(
+            reg,
+            config_with("example.fake", true, Some(20)),
+            rt.handle().clone(),
+        )
+        .unwrap();
+        lc.start_all();
+        assert!(lc.status_of(&AdapterId::new("example.fake")).is_running());
+
+        // 使适配器后续 start 失败（经自定义配置 fail=true 触发）
+        let mut new_cfg = AdapterConfig::default_enabled();
+        new_cfg.sampling = Some(5);
+        new_cfg
+            .custom
+            .insert("fail".to_string(), toml::Value::Boolean(true));
+        let err = lc
+            .apply_adapter_config(&AdapterId::new("example.fake"), new_cfg)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::Adapter(AdapterError::Config(_))));
+
+        // 内存配置回滚为旧值，且原运行状态已尽力恢复（旧配置启动成功）
+        assert_eq!(
+            lc.config().sampling_ms_of("example.fake"),
+            20,
+            "配置应回滚为旧值"
+        );
+        assert!(
+            lc.status_of(&AdapterId::new("example.fake")).is_running(),
+            "回滚后应恢复原运行状态"
+        );
+        lc.stop_all();
     }
 }
