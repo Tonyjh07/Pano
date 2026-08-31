@@ -31,7 +31,7 @@
 - adapter id 格式校验抽共享函数（注册 + 配置解析两处复用，含全小写 ASCII 校验）；
 - 统一时钟源：core 暴露 `now()` 助手供适配器取时间戳（架构 §4「时间戳由 core 提供」）。
 
-## M1.1 —— UI 多窗口 + 托盘常驻（用户新需求）
+## M1.1 —— UI 多窗口 + 托盘常驻（用户新需求）✅（交付 `a312b04`；实测暴露性能问题 → M1.2 迁移 Tauri）
 
 在 M1 基础上重构 UI 窗口模型（设计见 `docs/ui.md` §2 / §9）：
 
@@ -44,15 +44,44 @@
 **实现说明 / 遗留**：
 
 - 应用图标与托盘图标：`pano-ui/assets/pano_icon.png`（512×512，include_bytes! 嵌入）；托盘图标缩放到 32×32；
-- 组件窗口位置记忆（重启后恢复窗口布局）归 M3；
-- 适配器 `stop` 的 `block_on` 等待（修复一致性测试竞态）会让 UI 线程在有长清理逻辑的适配器上短暂阻塞——真实适配器出现时可将 stop 挪到工作线程；
+- 组件窗口位置记忆（重启后恢复窗口布局）→ 由 M1.2 窗口服务的**布局持久化**承接；
+- 适配器 `stop` 的 `block_on` 等待（修复一致性测试竞态）会让 UI 线程在有长清理逻辑的适配器上短暂阻塞——M1.2 迁 Tauri 后启停走异步命令，天然规避；
 - `pano-core` 测试 `FakeAdapter::stop` 仍是 abort-only，存在同款偶发竞态（未触发过），后续修复。
+
+## M1.2 —— 架构重构：Tauri 迁移 + 窗口服务 + 远程数据源预留（用户新需求）
+
+**背景 / 动机**：M1.1 用户实测发现 egui/eframe 架构性限制——单事件循环 + 即时模式全量重绘 + Windows 同步渲染 hack（[egui PR #2280](https://github.com/emilk/egui/pull/2280)）：管理窗口鼠标高频交互持续 ~100fps 渲染，挤占组件窗口重绘请求（实测空隙最长 16s；渲染逻辑本身 0-2ms，瓶颈在调度）。逐项配置（Fifo / 帧延迟 / 唤醒节流）无法根治 → 用户决策迁移 **Tauri v2**（每窗口独立 WebView 渲染进程，架构根治）。
+
+**用户新需求（决策已逐项确认）**：
+
+- **R1 组件与窗口分离**：组件只描述内容 + `WindowSpec` 声明；窗口由主程序管理的窗口服务（新增 `pano-window`）统一创建 / 控制；保持 1 组件 = 1 窗口；
+- **R2 窗口控制 API**：经 `WindowHandle` 调用全屏 / 置顶 / 绑定显示器 / 位置大小 / 可见性；「绑定显示器」= 记住上次显示器 / 位置（布局持久化）+ 可指定显示器打开；仅 Rust 内部 API（不预留远程控制协议）；
+- **R3 远程数据源预留**：HTTP 轮询 + WebSocket 推送都预留；core 定义轻量 `HttpClient` 抽象（不依赖具体库）+ pano-adapters 提供共享基座（reqwest / tokio-tungstenite）；新增能力标记 `RemoteSource`；不实现具体远程适配器。
+
+**范围**：
+
+- 新增 `pano-window` crate：`WindowService` / `WindowHandle` / `WindowSpec` / `MonitorId` / 布局持久化（Tauri v2 实现）；
+- `pano-ui` 重写：Rust 命令层（tauri commands + 事件桥接 core→前端）+ 前端（推荐 Svelte 5 + Vite + TS + uPlot，可替换，见 ui.md §10）；
+- `pano-core` 扩展：`UISpec` 增加 `components` 声明；`AdapterContext` 增加 `http` 注入点；`Capability::RemoteSource`；
+- `pano-adapters`：新增 `remote/` 共享基座（`http_poll` / `ws_push` 模板）；
+- `pano-app`：装配 core + 窗口服务 + ui；托盘常驻、`--log-file` 延续；
+- 测试与文档：pano-window 单测（spec / 持久化）、命令层单测、前端 Vitest；`docs/` 四份设计文档与 `AGENTS.md` 已更新为 M1.2 设计基线（设计先行）。
+
+**设计文档（本里程碑基线）**：`docs/architecture.md`（§1/§5/§7/§13/§14）、`docs/ui.md`（§2/§6/§9/§10）、`docs/spec.md`（§2/§3/§8/§9/§10）、本文档。
+
+**实现说明 / 遗留**：
+
+- egui 版本（`a312b04` 及其后未提交的修复批次）按用户决策**直接丢弃**，不保留回退分支；已验证经验已吸收进本里程碑设计：修改即时生效、启停 / 配置修改走后台异步（不卡 UI）、关闭窗口 = 隐藏、数据驱动刷新用事件推送（非轮询 / 非帧内检测）、`--log-file`；
+- 前端栈为推荐方案，编码前可替换（仅影响 `pano-ui/web/`）；
+- 远程数据源仅预留基座与文档；具体远程适配器（如 HTTP 轮询 / WebSocket 实时源）归 M2+ 按需实现，接入路径见 architecture §14；
+- 一个窗口多组件布局明确不在本次范围。
 
 ## M2 —— 监控适配器与仪表盘
 
 - 系统监控适配器：`sys.cpu`、`sys.mem`、`sys.disk`、`sys.net`（按平台条件编译）；
+- 远程数据源示例适配器（复用 M1.2 基座，如 HTTP 轮询型 / WebSocket 推送型各一个示例）；
 - 仪表盘正式化：多面板布局、速率图 / 曲线；
-- CI 门禁（fmt / clippy / test / audit）；`egui_kittest` 无头 UI 测试；
+- CI 门禁（fmt / clippy / test / audit）；前端 Vitest + 命令层单测；
 - 主题切换落地。
 
 ## M3 —— 增强与打磨
@@ -70,7 +99,9 @@
 
 | 风险 | 对策 |
 | --- | --- |
-| egui 大量曲线时掉帧 | 样本抽稀、帧率上限、仅数据变化时重绘 |
-| tokio 与 egui 生命周期错位 | M1 定义清楚关闭顺序：先停适配器任务，再退 UI |
+| 前端曲线大量数据掉帧 | uPlot + 样本抽稀（只取最近 N 点）+ 事件节流 |
+| tokio 与 Tauri 生命周期错位 | M1 定义清楚关闭顺序：先停适配器任务，再退窗口 / 结束进程 |
 | 环形缓冲锁竞争 | M1 简单锁起步，预留 arc-swap / 分片锁替换点 |
 | 平台差异导致适配器行为不一 | 一致性测试 + Unsupported 状态机制 |
+| Windows 缺 WebView2 运行时 | 安装包引导安装 / 检测提示（M3 打包时落地） |
+| 前端构建链引入复杂度 | 前端栈收敛在 `pano-ui/web/` 内部；命令层与前端经类型化接口对接 |

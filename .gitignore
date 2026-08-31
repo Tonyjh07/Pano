@@ -12,3 +12,4 @@ Thumbs.db
 
 # Pano runtime
 pano.toml
+pano_trace.log
