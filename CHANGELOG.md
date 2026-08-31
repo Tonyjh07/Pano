@@ -22,6 +22,10 @@
   简易指数退避（1s/2s/4s…封顶 60s）；具体远程适配器归 M2。
 - **pano-app 装配**：Tauri Builder（命令注册 / 托盘 / 关闭=隐藏 / 布局持久化
   串行写回 / 事件桥接 / headless 模式保留 / `--log-file`）。
+- **修复（dev 流程）**：`cargo tauri dev` 的 cwd 与仓库根不一致导致默认配置
+  `pano.toml` 找不到——配置文件路径改为从 cwd 逐级向上解析；README「快速开始」
+  区分开发模式（`cargo tauri dev` 一条命令）与独立运行（release 构建嵌入前端
+  资源，不依赖 dev server）。
 
 ### M1.1 UI 多窗口 + 托盘常驻（交付 `a312b04`，已被 M1.2 Tauri 迁移替代）
 
