@@ -3,9 +3,11 @@
 //! 提供：
 //! - [`ReqwestHttpClient`]：`pano_core::http::HttpClient` 的 reqwest 实现
 //!   （错误映射：超时 → `HttpError::Timeout`、非 2xx → `HttpError::Status`）；
-//! - [`poll_loop`]：轮询骨架 —— 按周期 GET，成功回调推送样本，失败退避重试。
+//! - [`poll_loop`]：轮询骨架 —— 按周期 GET，成功回调推送样本，失败走 core 级
+//!   [`pano_core::retry::Retry`] 退避重试（连续失败达阈值 → `AdapterStatus::Error`，
+//!   经 `on_status` 回调同步给适配器；仍继续后台重试，成功自动恢复）。
 //!
-//! ## 模板用法（M2 实现远程适配器时参考）
+//! ## 模板用法（远程适配器参考，如 `remote.http-sample`）
 //!
 //! ```ignore
 //! fn start(&mut self, ctx: AdapterContext) -> Result<(), AdapterError> {
@@ -17,7 +19,9 @@
 //!     let sampling = ctx.sampling;
 //!     let url: String = /* 自定义配置 */;
 //!     let headers: Vec<(String, String)> = /* 自定义配置 */;
+//!     let status: Arc<Mutex<AdapterStatus>> = /* 适配器共享状态 */;
 //!     self.task = Some(ctx.runtime.spawn(async move {
+//!         let status_ref = status.clone();
 //!         pano_adapters::remote::http_poll::poll_loop(
 //!             http.as_ref(),
 //!             &url,
@@ -25,6 +29,9 @@
 //!             sampling,
 //!             move |resp| {
 //!                 // serde_json 解析响应体 → sink.push(series, sample)
+//!             },
+//!             move |new_status: pano_core::adapter::AdapterStatus| {
+//!                 *status_ref.lock().unwrap() = new_status;
 //!             },
 //!         )
 //!         .await;
@@ -37,9 +44,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use pano_core::adapter::AdapterStatus;
 use pano_core::http::{HttpClient, HttpError, HttpResponse};
 
-use crate::remote::Backoff;
+use crate::remote::Retry;
 
 /// reqwest 实现的 [`HttpClient`]（pano-app 装配层按 feature 构造并注入 core）。
 pub struct ReqwestHttpClient {
@@ -86,7 +94,10 @@ impl HttpClient for ReqwestHttpClient {
 }
 
 /// 轮询循环骨架：成功 → 回调解析推送 → 等一个采样周期；
-/// 失败 → 退避等待后重试（请求本身超时由客户端超时兜底）。
+/// 失败 → core 级退避等待后重试（请求本身超时由客户端超时兜底）。
+///
+/// 状态经 `on_status` 回调同步：成功 → `Running`；连续失败达阈值 →
+/// `AdapterStatus::Error { last_error }`（仍继续后台重试，成功自动恢复）。
 ///
 /// 该循环不会自行退出，须运行在适配器任务中（`stop` 时 abort）。
 pub async fn poll_loop(
@@ -95,21 +106,27 @@ pub async fn poll_loop(
     headers: &[(String, String)],
     interval: Duration,
     mut on_response: impl FnMut(HttpResponse),
+    mut on_status: impl FnMut(AdapterStatus),
 ) {
-    let mut backoff = Backoff::new();
+    let mut retry = Retry::new();
     loop {
         match client.get(url, headers).await {
             Ok(response) => {
-                backoff.reset();
+                retry.on_success();
+                on_status(AdapterStatus::Running);
                 on_response(response);
                 tokio::time::sleep(interval).await;
             }
             Err(error) => {
-                let delay = backoff.next_delay();
+                let delay = retry.next_delay();
+                if let Some(status) = retry.on_failure(error.to_string()) {
+                    on_status(status);
+                }
                 tracing::warn!(
                     target: "pano::adapters::remote",
                     url,
                     error = %error,
+                    failures = retry.failures(),
                     delay_ms = delay.as_millis(),
                     "HTTP 轮询失败，退避重试"
                 );
