@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/pano-core",
     "crates/pano-adapters",
+    "crates/pano-window",
     "crates/pano-ui",
     "crates/pano-app",
 ]
@@ -17,8 +18,10 @@ repository = "https://github.com/Tonyjh07/Pano"
 pano-core = { path = "crates/pano-core" }
 # 关闭默认特性：feature 由 pano-app 透传控制（spec §5）
 pano-adapters = { path = "crates/pano-adapters", default-features = false }
+pano-window = { path = "crates/pano-window" }
 pano-ui = { path = "crates/pano-ui" }
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+tauri = { version = "2" }
