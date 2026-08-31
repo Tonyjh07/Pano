@@ -68,6 +68,11 @@ impl Lifecycle {
         &self.config
     }
 
+    /// 当前配置（可变；pano-app 写回 pano.toml 前做段级合并，如窗口布局）。
+    pub fn config_mut(&mut self) -> &mut PanoConfig {
+        &mut self.config
+    }
+
     /// 启动全部启用中的适配器；单个失败不阻塞其他（记录日志并转 Error 状态）。
     pub fn start_all(&mut self) {
         let ids = self.registry.ids();

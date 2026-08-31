@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Pano 二进制入口：组装 core + adapters + ui"
+description = "Pano 二进制入口：组装 core + 窗口服务 + ui（Tauri v2）"
 
 # 透传适配器 feature 到 pano-adapters（spec §5）：
 # 用户通过 `cargo build --features ...` 决定打进哪些适配器
@@ -16,10 +16,14 @@ adapter-example-sine = ["pano-adapters/adapter-example-sine"]
 [dependencies]
 pano-core.workspace = true
 pano-adapters.workspace = true
+pano-window.workspace = true
 pano-ui.workspace = true
+tauri = { workspace = true, features = ["tray-icon", "image-png"] }
 anyhow.workspace = true
 tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio.workspace = true
 clap = { version = "4", features = ["derive"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-eframe = "0.36.1"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

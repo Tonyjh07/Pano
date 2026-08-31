@@ -1,0 +1,107 @@
+// 命令层 DTO 的 TS 类型镜像（与 crates/pano-ui/src/dto.rs 对应）+ invoke 封装。
+import { invoke } from "@tauri-apps/api/core";
+
+export interface FieldInfo {
+  key: string;
+  label: string;
+  kind: "number" | "bool" | "text" | "choice";
+  default: number | boolean | string;
+  choices: string[];
+  help: string | null;
+}
+
+export interface AdapterInfo {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  capabilities: string[];
+  status: string;
+  running: boolean;
+  enabled: boolean;
+  sampling_ms: number;
+  last_error: string | null;
+  schema: FieldInfo[];
+}
+
+export interface SampleEvent {
+  series: string;
+  timestamp_ms: number;
+  /** Rust 侧 SampleValue 的 JSON 表达：数值 / 布尔 / 文本 / 任意 JSON（含数组 / null）。 */
+  value: number | boolean | string | Record<string, unknown> | unknown[] | null;
+}
+
+export interface StatusInfo {
+  status: string;
+  running: boolean;
+  last_error: string | null;
+}
+
+export interface MonitorInfo {
+  id: string;
+  name: string;
+  is_primary: boolean;
+  position: [number, number];
+  size: [number, number];
+  scale_factor: number;
+}
+
+/** 命令封装：参数名用 camelCase，Tauri 自动映射为 Rust 的 snake_case。 */
+export const api = {
+  listAdapters: () => invoke<AdapterInfo[]>("list_adapters"),
+
+  adapterStatus: (id: string) => invoke<StatusInfo>("adapter_status", { id }),
+
+  setAdapterEnabled: (id: string, enabled: boolean) =>
+    invoke<void>("set_adapter_enabled", { id, enabled }),
+
+  setAdapterSampling: (id: string, samplingMs: number) =>
+    invoke<void>("set_adapter_sampling", { id, samplingMs }),
+
+  restartAdapter: (id: string) => invoke<void>("restart_adapter", { id }),
+
+  seriesHistory: (series: string, window?: number) =>
+    invoke<SampleEvent[]>("series_history", { series, window }),
+
+  seriesLatest: (series: string) => invoke<SampleEvent | null>("series_latest", { series }),
+
+  componentSeries: (id: string) => invoke<string[]>("component_series", { id }),
+
+  windowSetFullscreen: (label: string, enabled: boolean) =>
+    invoke<void>("window_set_fullscreen", { label, enabled }),
+
+  windowSetAlwaysOnTop: (label: string, enabled: boolean) =>
+    invoke<void>("window_set_always_on_top", { label, enabled }),
+
+  windowSetMonitor: (label: string, monitorId: string) =>
+    invoke<void>("window_set_monitor", { label, monitorId }),
+
+  monitors: () => invoke<MonitorInfo[]>("monitors"),
+
+  configPreview: () => invoke<string>("config_preview"),
+
+  configSchemaVersion: () => invoke<number>("config_schema_version"),
+};
+
+/** 数值格式化（数值卡 / 曲线标签）。 */
+export function formatValue(value: SampleEvent["value"]): string {
+  if (typeof value === "number") {
+    // 整数不补零，小数保留 2 位并去尾零
+    if (Number.isInteger(value)) return value.toString();
+    return value.toFixed(2).replace(/\.?0+$/, "");
+  }
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+/** 样本序列 → uPlot 数据（时间 ms + 数值；非数值样本记为 null）。 */
+export function toPlotData(samples: SampleEvent[]): { x: number[]; y: (number | null)[] } {
+  const x: number[] = [];
+  const y: (number | null)[] = [];
+  for (const s of samples) {
+    x.push(s.timestamp_ms);
+    y.push(typeof s.value === "number" ? s.value : null);
+  }
+  return { x, y };
+}

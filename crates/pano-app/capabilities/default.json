@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Pano 前端默认能力：窗口标签读取 / 事件监听 / invoke",
+  "windows": ["*"],
+  "permissions": ["core:default", "core:event:default", "core:app:default"]
+}

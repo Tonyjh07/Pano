@@ -63,6 +63,12 @@ impl SeriesId {
         Self(format!("{adapter}.{metric}"))
     }
 
+    /// 由完整 series id 字符串构造（前端 / 配置传入，调用方保证
+    /// `<adapter_id>.<指标>` 格式）。
+    pub fn parse(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
     /// 该 series 所属的适配器 id（`<域>.<名称>` 前缀，取最后一个 `.` 之前的部分）。
     pub fn adapter_id(&self) -> AdapterId {
         let prefix = self
