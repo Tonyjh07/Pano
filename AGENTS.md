@@ -5,8 +5,8 @@
 
 ## 1. 项目概览
 
-- **Pano（Panorama）**：Rust + egui 的可插拔监控面板。
-- 核心架构：**适配器（可替换，获取信息）→ 核心 core（编排）→ UI（可替换，声明所需适配器）**。
+- **Pano（Panorama）**：Rust + Tauri v2（WebView 前端）的可插拔监控面板。
+- 核心架构：**适配器（可替换，获取信息）→ 核心 core（编排）→ UI（可替换，声明所需适配器）**；窗口由主程序装配的**窗口服务**（pano-window）管理，UI 组件只声明需求并经 API 控制窗口。
 - 关键决策：trait 注册表 + 编译期特性开关；推送 + 环形缓冲；tokio 运行时。
 
 ## 2. 核心开发规范
@@ -15,12 +15,13 @@
 
 | crate | 职责 | 依赖方向 |
 | --- | --- | --- |
-| `pano-core` | 适配器注册表、生命周期、样本存储（环形缓冲）、配置、能力匹配 | 不依赖 UI 与任何具体适配器 |
-| `pano-adapters` | 内置适配器集合，每适配器一个 feature | 只实现 core 定义的 trait |
-| `pano-ui` | egui 界面：页面、组件、主题；声明 UISpec | 只读 core 的公共 API |
-| `pano-app` | 二进制入口：组装 core + ui | 依赖以上三者 |
+| `pano-core` | 适配器注册表、生命周期、样本存储（环形缓冲）、配置、能力匹配 | 仅依赖基础库，不依赖 UI / 窗口 / 具体适配器 |
+| `pano-adapters` | 内置适配器集合，每适配器一个 feature；远程数据源共享基座 | 只实现 core 定义的 trait |
+| `pano-window` | 窗口服务：窗口生命周期、控制 API（全屏/置顶/显示器绑定/位置）、布局持久化 | 不依赖 core 运行逻辑（可引用 core 的纯数据声明）、不依赖 adapters / ui |
+| `pano-ui` | Tauri 前端 + Rust 命令层：组件内容、事件桥接（core→前端）、窗口 API 调用 | 只读 core 的公共 API + 窗口 API（pano-window 类型） |
+| `pano-app` | 二进制入口：组装 core + 窗口服务 + ui | 依赖以上四者 |
 
-**铁律**：core 不知道具体适配器和 UI；UI 不知道具体适配器；适配器不知道 UI。
+**铁律**：core 不知道具体适配器和 UI；UI 不知道具体适配器；适配器不知道 UI；**UI 组件不知道窗口实现**（只持 `WindowHandle` 调 API）。
 任何改动都不得破坏这一依赖方向。
 
 ### 2.2 命名规范
@@ -44,14 +45,14 @@
 
 ### 2.5 日志
 
-- 统一 `tracing`；target：`pano::core`、`pano::adapters::<模块名>`（模块名小写下划线，如 `pano::adapters::example_counter`）、`pano::ui`
+- 统一 `tracing`；target：`pano::core`、`pano::adapters::<模块名>`（模块名小写下划线，如 `pano::adapters::example_counter`）、`pano::ui`、`pano::window`
 - 级别约定：`trace` 样本级 / `debug` 生命周期 / `info` 关键事件 / `warn` 可恢复失败 / `error` 故障
 - 库内禁止 `println!` / `eprintln!`
 
 ### 2.6 配置
 
-- `pano.toml`：`schema_version`、`[core]`、`[adapters.<id>]`（固定字段 `enabled`、`sampling`，其余为该适配器自定义字段）
-- 热重载：修改配置 → 写回文件 → **仅重启受影响适配器**；失败回滚原配置
+- `pano.toml`：`schema_version`、`[core]`、`[adapters.<id>]`（固定字段 `enabled`、`sampling`，其余为该适配器自定义字段）、`[window.<id>]`（布局持久化：位置 / 大小 / 所在显示器）
+- 热重载：修改配置 → 写回文件 → **仅重启受影响适配器**；失败回滚原配置；布局持久化写回与热重载写文件由 pano-app 协调串行（见架构 §13）
 
 ## 3. 测试规范
 
@@ -60,7 +61,7 @@
   1. 生命周期：start → 产出样本 → stop 干净退出；
   2. 采样周期正确（容差内）；
   3. 非法配置返回 `AdapterError::Config`。
-- UI 测试：M2 起引入 `egui_kittest` 无头交互测试。
+- UI 测试：前端单测（Vitest，组件渲染与交互）+ Tauri 命令层单测（Rust）；端到端（Playwright / tauri-driver）M2 起视需要引入。
 - **提交门禁**：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test` 全部通过后方可提交；M2 起随 CI 接入 `cargo audit`（见 spec §9）。
 
 ## 4. 提交工作流（Git）
