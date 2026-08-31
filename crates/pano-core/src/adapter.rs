@@ -11,10 +11,19 @@ use std::time::{Duration, SystemTime};
 use tokio::runtime::Handle;
 
 use crate::capability::Capability;
+use crate::http::HttpClient;
+
+/// 统一时钟源（架构 §4）：所有适配器样本时间戳一律经此获取，
+/// 保证采样时间戳与曲线对齐（M1 审查待办）。
+pub fn now() -> SystemTime {
+    SystemTime::now()
+}
 
 /// 适配器全局唯一 id，格式 `<域>.<名称>`（全小写 ASCII、连字符分隔）。
 ///
 /// 示例：`example.counter`、`sys.cpu`。
+///
+/// 格式校验见 [`crate::capability::is_valid_adapter_id`]（注册与配置解析处复用）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AdapterId(String);
 
@@ -52,6 +61,16 @@ impl SeriesId {
     /// 由适配器 id 与指标名构造。
     pub fn new(adapter: &AdapterId, metric: &str) -> Self {
         Self(format!("{adapter}.{metric}"))
+    }
+
+    /// 该 series 所属的适配器 id（`<域>.<名称>` 前缀，取最后一个 `.` 之前的部分）。
+    pub fn adapter_id(&self) -> AdapterId {
+        let prefix = self
+            .0
+            .rsplit_once('.')
+            .map(|(adapter, _)| adapter)
+            .unwrap_or(&self.0);
+        AdapterId::new(prefix)
     }
 
     /// 原始字符串视图。
@@ -250,7 +269,7 @@ impl fmt::Debug for SampleSink {
 }
 
 /// 适配器启动时由 core 提供的上下文。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AdapterContext {
     /// 样本推送句柄。
     pub sink: SampleSink,
@@ -260,6 +279,22 @@ pub struct AdapterContext {
     pub runtime: Handle,
     /// 该适配器的自定义配置（键 → 值，由 pano.toml 解析而来）。
     pub config: HashMap<String, ConfigValue>,
+    /// 远程数据源注入点（M1.2 预留，R3，见架构 §14）：
+    /// 由 pano-app 按 feature 装配（reqwest 实现）；本地适配器为 `None`。
+    pub http: Option<Arc<dyn HttpClient>>,
+}
+
+impl fmt::Debug for AdapterContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `dyn HttpClient` 不实现 Debug，仅打印是否注入。
+        f.debug_struct("AdapterContext")
+            .field("sink", &self.sink)
+            .field("sampling", &self.sampling)
+            .field("runtime", &self.runtime)
+            .field("config", &self.config)
+            .field("http", &self.http.is_some())
+            .finish()
+    }
 }
 
 /// 适配器契约：一个信息源。

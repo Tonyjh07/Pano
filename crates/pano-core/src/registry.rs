@@ -1,10 +1,12 @@
 //! 适配器注册表：`AdapterId → Box<dyn Adapter>` 映射。
 //!
-//! id 重复 → [`CoreError::DuplicateAdapter`]，启动失败（开发期尽早暴露）。
+//! - id 格式非法 → [`CoreError::InvalidAdapterId`]；
+//! - id 重复 → [`CoreError::DuplicateAdapter`]；两者均为启动失败（开发期尽早暴露）。
 
 use std::collections::HashMap;
 
 use crate::adapter::{Adapter, AdapterId};
+use crate::capability::is_valid_adapter_id;
 use crate::error::CoreError;
 
 /// 适配器注册表。
@@ -19,9 +21,13 @@ impl Registry {
         Self::default()
     }
 
-    /// 注册一个适配器；id 重复返回 [`CoreError::DuplicateAdapter`]。
+    /// 注册一个适配器；id 格式非法或重复分别返回
+    /// [`CoreError::InvalidAdapterId`] / [`CoreError::DuplicateAdapter`]。
     pub fn register(&mut self, adapter: Box<dyn Adapter>) -> Result<(), CoreError> {
         let id = adapter.meta().id.clone();
+        if !is_valid_adapter_id(id.as_str()) {
+            return Err(CoreError::InvalidAdapterId(id.as_str().to_string()));
+        }
         if self.adapters.contains_key(&id) {
             return Err(CoreError::DuplicateAdapter(id));
         }
@@ -123,5 +129,15 @@ mod tests {
             err,
             CoreError::DuplicateAdapter(id) if id.as_str() == "example.a"
         ));
+    }
+
+    #[test]
+    fn invalid_id_rejected() {
+        let mut reg = Registry::new();
+        let err = reg.register(dummy("UPPER.Case")).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidAdapterId(_)));
+
+        let err = reg.register(dummy("no-dot")).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidAdapterId(_)));
     }
 }

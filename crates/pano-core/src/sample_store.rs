@@ -3,9 +3,14 @@
 //! 写端：适配器任务（[`SampleStore::push`]）；读端：UI 主线程
 //! （[`SampleStore::latest`] / [`SampleStore::history`]）。
 //! M1 用 `RwLock` 起步，预留替换点（arc-swap / 分片锁），性能不足再升级。
+//!
+//! M1.2：新增**事件订阅**（架构 §4 / §6）——`push` 后经 broadcast 通知订阅者，
+//! UI 桥接层据此 emit 前端事件（无轮询、无帧内检测）。
 
 use std::collections::HashMap;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use tokio::sync::broadcast;
 
 use crate::adapter::{Sample, SeriesId};
 
@@ -77,33 +82,52 @@ pub struct SampleStore {
     series: RwLock<HashMap<SeriesId, RingBuffer>>,
     /// 新建 series 的默认容量。
     default_capacity: usize,
+    /// 事件订阅：新样本到达时广播所属 series id（订阅端：pano-ui 桥接层）。
+    events: broadcast::Sender<SeriesId>,
 }
 
 impl SampleStore {
     /// 默认容量（架构 §4：默认 4096 样本）。
     pub const DEFAULT_CAPACITY: usize = 4096;
 
+    /// 事件订阅通道容量（订阅端消费慢时丢弃最旧通知，读端走快照兜底）。
+    pub const EVENT_CHANNEL_CAPACITY: usize = 1024;
+
     /// 以默认容量构造。
     pub fn new() -> Self {
         Self::with_capacity(Self::DEFAULT_CAPACITY)
     }
 
-    /// 以指定容量构造（作用于此后新建的 series）。
     /// 以指定容量构造（作用于此后新建的 series）；容量至少为 1。
     pub fn with_capacity(default_capacity: usize) -> Self {
+        let (events, _) = broadcast::channel(Self::EVENT_CHANNEL_CAPACITY);
         Self {
             series: RwLock::new(HashMap::new()),
             default_capacity: default_capacity.max(1),
+            events,
         }
     }
 
     /// 写入一个样本（适配器侧调用；锁被毒化时沿用旧数据，不 panic）。
+    ///
+    /// 写入后广播新样本事件；无订阅者时静默忽略。
     pub fn push(&self, series: SeriesId, sample: Sample) {
-        let mut map = self.write();
-        let buf = map
-            .entry(series)
-            .or_insert_with(|| RingBuffer::new(self.default_capacity));
-        buf.push(sample);
+        {
+            let mut map = self.write();
+            let buf = map
+                .entry(series.clone())
+                .or_insert_with(|| RingBuffer::new(self.default_capacity));
+            buf.push(sample);
+        }
+        let _ = self.events.send(series);
+    }
+
+    /// 订阅新样本事件（任一 series 有新样本即收到其 id）。
+    ///
+    /// 消费慢于生产时收到 [`tokio::sync::broadcast::error::RecvError::Lagged`]，
+    /// 桥接层可忽略（前端以快照 / 最新值兜底）。
+    pub fn subscribe(&self) -> broadcast::Receiver<SeriesId> {
+        self.events.subscribe()
     }
 
     /// 读取指定 series 的最新样本。
@@ -214,5 +238,34 @@ mod tests {
         assert_eq!(store.history(&s1, 10).len(), 2);
         assert_eq!(store.history(&s2, 10).len(), 1);
         assert_eq!(store.history(&series("c"), 10).len(), 0);
+    }
+
+    #[test]
+    fn subscription_receives_pushed_series() {
+        let store = SampleStore::with_capacity(8);
+        let mut rx = store.subscribe();
+        let s1 = series("a");
+        store.push(s1.clone(), sample(1));
+        store.push(series("b"), sample(2));
+        store.push(s1.clone(), sample(3));
+
+        // 每条推送都广播 series id（同步可读，无需运行时）。
+        assert_eq!(rx.try_recv().unwrap(), s1);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            SeriesId::new(&crate::adapter::AdapterId::new("test.adapter"), "b")
+        );
+        assert_eq!(rx.try_recv().unwrap(), s1);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn subscription_without_receivers_is_silent() {
+        let store = SampleStore::with_capacity(8);
+        // 无订阅者时 push 不 panic、不阻塞。
+        store.push(series("a"), sample(1));
     }
 }

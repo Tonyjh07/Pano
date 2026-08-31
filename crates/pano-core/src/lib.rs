@@ -7,6 +7,7 @@ pub mod adapter;
 pub mod capability;
 pub mod config;
 pub mod error;
+pub mod http;
 pub mod lifecycle;
 pub mod registry;
 pub mod sample_store;
