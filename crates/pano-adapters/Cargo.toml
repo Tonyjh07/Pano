@@ -11,8 +11,15 @@ description = "Pano 内置适配器集合，每适配器一个 feature"
 default = ["adapter-example-counter", "adapter-example-sine"]
 adapter-example-counter = []
 adapter-example-sine = []
+# 远程数据源共享基座（M1.2 R3 预留，架构 §14）；具体远程适配器归 M2+
+remote = ["remote-http", "remote-ws"]
+remote-http = ["dep:reqwest"]
+remote-ws = ["dep:tokio-tungstenite", "dep:futures-util"]
 
 [dependencies]
 pano-core.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+reqwest = { version = "0.12", optional = true }
+tokio-tungstenite = { version = "0.24", optional = true }
+futures-util = { version = "0.3", optional = true }

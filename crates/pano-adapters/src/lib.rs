@@ -2,6 +2,11 @@
 //!
 //! 每个适配器一个 feature（`adapter-<名称>`），未启用 feature 的适配器不参与编译。
 //! 换适配器 = 改 feature 重新编译（架构 §6）。
+//!
+//! `remote` 为远程数据源共享基座（M1.2 R3 预留，架构 §14）：HTTP 轮询 /
+//! WebSocket 推送模板，按 `remote-http` / `remote-ws` feature 编译。
+
+pub mod remote;
 
 #[cfg(feature = "adapter-example-counter")]
 mod example_counter;
