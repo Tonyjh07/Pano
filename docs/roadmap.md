@@ -48,7 +48,7 @@
 - 适配器 `stop` 的 `block_on` 等待（修复一致性测试竞态）会让 UI 线程在有长清理逻辑的适配器上短暂阻塞——M1.2 迁 Tauri 后启停走异步命令，天然规避；
 - `pano-core` 测试 `FakeAdapter::stop` 仍是 abort-only，存在同款偶发竞态（未触发过），后续修复。
 
-## M1.2 —— 架构重构：Tauri 迁移 + 窗口服务 + 远程数据源预留（用户新需求）
+## M1.2 —— 架构重构：Tauri 迁移 + 窗口服务 + 远程数据源预留（用户新需求）✅
 
 **背景 / 动机**：M1.1 用户实测发现 egui/eframe 架构性限制——单事件循环 + 即时模式全量重绘 + Windows 同步渲染 hack（[egui PR #2280](https://github.com/emilk/egui/pull/2280)）：管理窗口鼠标高频交互持续 ~100fps 渲染，挤占组件窗口重绘请求（实测空隙最长 16s；渲染逻辑本身 0-2ms，瓶颈在调度）。逐项配置（Fifo / 帧延迟 / 唤醒节流）无法根治 → 用户决策迁移 **Tauri v2**（每窗口独立 WebView 渲染进程，架构根治）。
 
@@ -72,8 +72,11 @@
 **实现说明 / 遗留**：
 
 - egui 版本（`a312b04` 及其后未提交的修复批次）按用户决策**直接丢弃**，不保留回退分支；已验证经验已吸收进本里程碑设计：修改即时生效、启停 / 配置修改走后台异步（不卡 UI）、关闭窗口 = 隐藏、数据驱动刷新用事件推送（非轮询 / 非帧内检测）、`--log-file`；
-- 前端栈为推荐方案，编码前可替换（仅影响 `pano-ui/web/`）；
-- 远程数据源仅预留基座与文档；具体远程适配器（如 HTTP 轮询 / WebSocket 实时源）归 M2+ 按需实现，接入路径见 architecture §14；
+- **前端栈确认落地**：Svelte 5 + Vite + TS + uPlot（编码前决策确认）；Tauri 壳并入 `pano-app`（决策确认，见 architecture §11 注）；
+- **tauri CLI 注意**：before 命令以 `crates/` 为工作目录执行（frontend 目录深度 3 查找回退），`tauri.conf.json` 的 beforeDevCommand / beforeBuildCommand 使用相对 `crates/` 的路径（`pnpm --dir pano-ui/web …`），`cargo tauri dev` 从仓库根运行；
+- **远程数据源仅预留基座与文档**：`remote/` 模板按 feature 编译（`remote-http` / `remote-ws`），模板内置简易退避（core 级自动退避归 M2）；具体远程适配器归 M2+ 按需实现，接入路径见 architecture §14；
+- **布局持久化**：`[window.<id>]` 段由 pano-app 协调串行写回（窗口移动 / 缩放实时记内存，退出 / 配置保存时段级合并写文件）；记忆位置优先于显示器偏好，失效显示器回退默认位置不硬失败；
+- **打包**：`bundle.active = false`（M3 打包时再开）；`SeriesId::parse` 依赖调用方保证格式；同名显示器 MonitorId 碰撞为已知边界；
 - 一个窗口多组件布局明确不在本次范围。
 
 ## M2 —— 监控适配器与仪表盘
