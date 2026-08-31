@@ -22,20 +22,30 @@ Pano 以**监控面板**为主要用途，同时可扩展为其他「信息采�
 
 ## 快速开始
 
-前置：Rust stable、Node（pnpm）、WebView2（Windows）/ WebKit（macOS/Linux）。
-首次先构建前端（Tauri 编译时嵌入 `dist`）：
+前置：Rust stable、Node（pnpm）、WebView2（Windows）/ WebKit（macOS/Linux）、
+tauri CLI（`cargo install tauri-cli --locked`）。
+首次先安装前端依赖：
 
 ```bash
-cd crates/pano-ui/web && pnpm install && pnpm build && cd ../..
-cargo run -p pano-app                # GUI 模式（多窗口 + 托盘常驻）
-cargo run -p pano-app -- --headless  # 无头验证模式（跑 3 秒后退出）
+cd crates/pano-ui/web && pnpm install && cd ../..
 ```
 
-前端开发模式（热更新）：
+> **重要**：Tauri 的 **debug 构建加载 devUrl（http://localhost:1420）**，WebView 需要 Vite dev server 在跑，
+> 否则窗口打开后界面报 `ERR_CONNECTION_REFUSED`。两种正确姿势：
+
+**方式 A —— 开发模式（一条命令，自动拉起 Vite，推荐）**：
 
 ```bash
-cd crates/pano-ui/web && pnpm dev            # 终端 1：Vite dev server（端口 1420）
-cargo tauri dev                              # 终端 2：从仓库根目录运行（自动连接 devUrl）
+cargo tauri dev        # 从仓库根目录运行：before 命令自动 `pnpm --dir pano-ui/web dev`
+```
+
+**方式 B —— 独立运行（release 构建，前端资源已嵌入，不依赖 dev server）**：
+
+```bash
+cd crates/pano-ui/web && pnpm build && cd ../..
+cargo build --release
+./target/release/pano-app            # Windows 下为 pano-app.exe；多窗口 + 托盘常驻
+cargo run -p pano-app -- --headless  # 无头验证模式（跑 3 秒后退出，debug 即可）
 ```
 
 > 注：tauri CLI 的 before 命令以 `crates/` 为工作目录执行（`pnpm --dir pano-ui/web …`），

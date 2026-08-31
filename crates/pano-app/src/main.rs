@@ -66,9 +66,11 @@ fn main() -> Result<()> {
             .context("注册适配器失败（id 重复？）")?;
     }
 
-    // 2. 加载配置
-    let text = std::fs::read_to_string(&cli.config)
-        .with_context(|| format!("读取配置失败：{}", cli.config.display()))?;
+    // 2. 加载配置（默认路径从 cwd 逐级向上解析，兼容 `cargo tauri dev` 的 cwd 差异）
+    let config_path = resolve_config_path(&cli.config);
+    tracing::debug!(target: "pano::app", path = %config_path.display(), "配置文件解析结果");
+    let text = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("读取配置失败：{}", config_path.display()))?;
     let config = PanoConfig::parse(&text).context("解析配置失败")?;
 
     // 3. 组装 core（M1.2 无远程适配器，HttpClient 注入为 None；远程源 M2 装配）
@@ -78,7 +80,29 @@ fn main() -> Result<()> {
     if cli.headless {
         return run_headless(lifecycle, cli.duration);
     }
-    run_gui(lifecycle, cli.config)
+    run_gui(lifecycle, config_path)
+}
+
+/// 解析配置文件路径：
+/// - 显式路径（绝对路径或当前目录已存在）→ 原样使用；
+/// - 默认 `pano.toml` 在当前目录不存在 → 从 cwd 逐级向上查找
+///   （最多 6 个候选目录，含当前目录），兼容 `cargo tauri dev`
+///   （cwd 可能落在 crates/ 下）等启动方式。
+fn resolve_config_path(path: &std::path::Path) -> PathBuf {
+    if path.is_absolute() || path.exists() {
+        return path.to_path_buf();
+    }
+    let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    for _ in 0..6 {
+        let candidate = dir.join(path);
+        if candidate.is_file() {
+            return candidate;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    path.to_path_buf()
 }
 
 /// headless 模式：运行指定秒数，周期打印各 series 最新样本，随后干净退出。
@@ -358,4 +382,58 @@ fn init_tracing(log_file: Option<&std::path::Path>) -> Result<()> {
         None => builder.init(),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// set_current_dir 是进程级全局状态：涉及改 cwd 的用例串行执行。
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 在临时目录树中构造：root / a / b，root 下放 pano.toml；
+    /// 从 b 目录调用时默认路径应向上解析到 root。
+    #[test]
+    fn resolve_config_path_walks_up_to_ancestor() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("pano-test-{}", std::process::id()));
+        let a = root.join("a");
+        let b = a.join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(root.join("pano.toml"), "schema_version = 1\n").unwrap();
+
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&b).unwrap();
+        let resolved = resolve_config_path(std::path::Path::new("pano.toml"));
+        std::env::set_current_dir(prev).unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(resolved, root.join("pano.toml"), "应从 b 向上解析到 root");
+    }
+
+    #[test]
+    fn resolve_config_path_absolute_and_existing_passthrough() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("pano-test-abs-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("cfg.toml");
+        std::fs::write(&file, "schema_version = 1\n").unwrap();
+
+        // 绝对路径（无论是否存在）原样返回
+        let abs = resolve_config_path(&file);
+        assert_eq!(abs, file);
+        // 已存在的相对路径原样返回（不向上找）
+        let rel = resolve_config_path(std::path::Path::new("Cargo.toml"));
+        assert!(rel.is_file(), "cwd 下的 Cargo.toml 应原样命中：{rel:?}");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resolve_config_path_fallback_when_not_found() {
+        // 显式指定的不存在路径（非默认）兜底返回原路径
+        let p = std::path::Path::new("definitely-not-exists-xyz.toml");
+        let resolved = resolve_config_path(p);
+        assert_eq!(resolved, p.to_path_buf());
+    }
 }
