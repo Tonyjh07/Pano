@@ -1,0 +1,174 @@
+// Pano 主题（ui.md §5）：暗色默认，CSS 变量实现；亮色切换预留。
+:root {
+  --bg: #1e1e1e;
+  --panel: #252526;
+  --panel-2: #2d2d30;
+  --border: #333;
+  --accent: #4f9cf9;
+  --ok: #3fb950;
+  --warn: #d29922;
+  --err: #f85149;
+  --text: #d4d4d4;
+  --text-dim: #9d9d9d;
+  --radius: 4px;
+  --space: 8px;
+  --font: system-ui, "Microsoft YaHei", "PingFang SC", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+html[data-theme="light"] {
+  --bg: #f5f5f5;
+  --panel: #ffffff;
+  --panel-2: #f0f0f0;
+  --border: #d4d4d4;
+  --text: #1e1e1e;
+  --text-dim: #666;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+#app {
+  height: 100%;
+}
+
+/* 通用元素 */
+button {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+input,
+select {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+}
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th,
+td {
+  text-align: left;
+  padding: 6px var(--space);
+  border-bottom: 1px solid var(--border);
+}
+th {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+/* 状态徽标（ui.md §3.1） */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid transparent;
+}
+.badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.badge.running {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.badge.stopped {
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text-dim) 12%, transparent);
+}
+.badge.starting {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.badge.error {
+  color: var(--err);
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+.badge.disabled {
+  color: var(--text-dim);
+  background: transparent;
+  border-color: var(--border);
+}
+
+/* toast */
+.toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 100;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  animation: toast-in 0.15s ease-out;
+}
+.toast.error {
+  border-color: var(--err);
+}
+.toast.ok {
+  border-color: var(--ok);
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

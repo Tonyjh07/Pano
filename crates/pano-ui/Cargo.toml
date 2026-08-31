@@ -4,12 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Pano egui 界面：多窗口 + 托盘常驻、页面、组件、主题；声明 UISpec"
+description = "Pano Tauri 界面：Rust 命令层 + 事件桥接（core→前端）+ 前端工程（Svelte）；声明 UISpec"
 
 [dependencies]
-eframe = "0.36.1"
-egui_plot = "0.37"
-image = { version = "0.25", default-features = false, features = ["png"] }
 pano-core.workspace = true
+pano-window.workspace = true
+tauri.workspace = true
+tokio.workspace = true
 tracing.workspace = true
-tray-icon = { version = "0.24", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

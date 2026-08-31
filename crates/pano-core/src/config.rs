@@ -86,6 +86,17 @@ impl AdapterConfig {
             custom: HashMap::new(),
         }
     }
+
+    /// 默认配置（未启用，采样周期沿用 core 默认）。
+    ///
+    /// 供 UI 对**未配置**适配器做修改时兜底（如只改采样周期不应连带启用）。
+    pub fn default_disabled() -> Self {
+        Self {
+            enabled: false,
+            sampling: None,
+            custom: HashMap::new(),
+        }
+    }
 }
 
 fn default_sampling() -> u64 {

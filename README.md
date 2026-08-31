@@ -1,35 +1,48 @@
 # Pano
 
-> Panorama —— 基于 Rust + egui 的可插拔监控面板
+> Panorama —— 基于 Rust + Tauri v2 的可插拔监控面板
 
 Pano 以**监控面板**为主要用途，同时可扩展为其他「信息采集 + 展示」场景。
 核心设计理念：**适配器（可替换，负责获取信息）→ 核心程序 → UI（可替换，声明所需适配器）**。
 
 ## 当前状态
 
-🚀 **M1 架构骨架完成** —— 全链路「适配器 → core → UI」已跑通：
+🚀 **M1.2 架构重构完成** —— Tauri v2 迁移 + 窗口服务 + 远程数据源预留：
 
-- workspace 四个 crate（core / adapters / ui / app）；
-- 示例适配器 `example.counter`（递增计数）与 `example.sine`（正弦波），feature 开关可替换；
-- 适配器一致性测试基座，两个示例适配器全部通过。
-
-🪟 **M1.1 UI 多窗口 + 托盘常驻完成**：
-
-- **多窗口**：管理窗口（适配器 + 设置页签）+ 每个 series 一个独立监控组件窗口；
-- **托盘常驻**：应用驻留系统托盘，关闭窗口 = 隐藏不退出，托盘菜单可打开 / 聚焦窗口、退出应用；
-- **组件级窗口自由**：每个监控窗口可独立置顶 / 全屏（运行期切换）；
-- **图标**：应用窗口图标与托盘图标（`pano-ui/assets/pano_icon.png`）。
+- workspace 五个 crate（core / adapters / window / ui / app）；
+- **pano-window 窗口服务**：组件与窗口分离（R1）——组件只声明 `WindowSpec`，
+  窗口由主程序装配的窗口服务统一创建 / 控制（全屏 / 置顶 / 显示器绑定 / 位置 / 可见性，
+  R2）；布局持久化（`[window.<id>]` 段，重启恢复）；
+- **pano-ui 重写**：Tauri 命令层 + 事件桥接（core → 前端，无轮询）+ Svelte 5 前端
+  （多窗口 = 多 WebView 独立渲染进程，根治 M1.1 egui 单事件循环挤占问题）；
+- **远程数据源预留（R3）**：core 定义轻量 `HttpClient` 抽象 + `Capability::RemoteSource`；
+  pano-adapters 提供 `remote/` 共享基座（HTTP 轮询 / WebSocket 推送模板，feature 开关）；
+- 示例适配器 `example.counter` / `example.sine`，一致性测试基座全部通过；
+- 托盘常驻：关闭窗口 = 隐藏不退出；托盘菜单打开 / 聚焦窗口、退出应用。
 
 ## 快速开始
 
+前置：Rust stable、Node（pnpm）、WebView2（Windows）/ WebKit（macOS/Linux）。
+首次先构建前端（Tauri 编译时嵌入 `dist`）：
+
 ```bash
+cd crates/pano-ui/web && pnpm install && pnpm build && cd ../..
 cargo run -p pano-app                # GUI 模式（多窗口 + 托盘常驻）
 cargo run -p pano-app -- --headless  # 无头验证模式（跑 3 秒后退出）
 ```
 
-GUI 模式下应用常驻系统托盘：关闭任意窗口仅隐藏；托盘菜单「退出」才结束进程
-（无托盘环境下关闭窗口即退出）。当前托盘在 Windows / macOS 可用；
-Linux 需 `tray-icon` 的 gtk 后端（默认未启用，M3 打包时补齐）。
+前端开发模式（热更新）：
+
+```bash
+cd crates/pano-ui/web && pnpm dev            # 终端 1：Vite dev server（端口 1420）
+cargo tauri dev                              # 终端 2：从仓库根目录运行（自动连接 devUrl）
+```
+
+> 注：tauri CLI 的 before 命令以 `crates/` 为工作目录执行（`pnpm --dir pano-ui/web …`），
+> 请从仓库根目录运行 `cargo tauri dev` / `cargo tauri build`。
+
+GUI 模式下应用常驻系统托盘：关闭任意窗口仅隐藏；托盘菜单「退出」才结束进程。
+`--log-file <path>` 可把日志追加写入文件。
 
 配置文件 `pano.toml`（不入库）参考 [`pano.toml.example`](pano.toml.example)；
 换适配器 = 改 feature 重新编译，如：
@@ -43,30 +56,33 @@ cargo run -p pano-app --no-default-features --features adapter-example-sine
 | 决策点 | 结论 |
 | --- | --- |
 | 适配器加载机制 | trait 注册表 + 编译期特性开关（预留插件化边界） |
-| 数据流模型 | 推送 + 环形缓冲（适配器采样 → UI 按帧读取） |
+| 数据流模型 | 推送 + 环形缓冲 + 事件订阅（适配器采样 → 前端 listen，无轮询） |
+| GUI 框架 | Tauri v2（每窗口独立 WebView 渲染进程） |
+| 前端栈 | Svelte 5 + Vite + TypeScript + uPlot（pano-ui 内部实现，可替换） |
+| 窗口模型 | 组件与窗口分离：`WindowSpec` 声明 + pano-window 窗口服务 + `WindowHandle` API |
 | 异步运行时 | tokio |
-| 初期范围 | 适配器管理界面 + 示例适配器（验证架构） |
 
 ## 文档索引
 
 - [`AGENTS.md`](AGENTS.md) —— 核心开发与测试规范（代理工作指南，含提交审查 / 合并确认流程）
 - [`docs/spec.md`](docs/spec.md) —— 规范设计：workspace 组织、命名、错误、日志、配置、测试、依赖、版本
-- [`docs/architecture.md`](docs/architecture.md) —— 架构设计：分层、Adapter trait、数据流、线程模型、可替换性
-- [`docs/ui.md`](docs/ui.md) —— 图形界面设计：布局、页面、组件、主题、渲染策略
+- [`docs/architecture.md`](docs/architecture.md) —— 架构设计：分层、Adapter trait、数据流、线程模型、窗口服务、远程数据源预留
+- [`docs/ui.md`](docs/ui.md) —— 图形界面设计：窗口模型、页面、组件、主题、渲染策略
 - [`docs/roadmap.md`](docs/roadmap.md) —— 里程碑与实施计划（M0–M4）
 
 ## 目录结构
 
 ```
 pano/
-├── Cargo.toml              # workspace（成员：crates/ 下四个 crate）
+├── Cargo.toml              # workspace（成员：crates/ 下五个 crate）
 ├── rust-toolchain.toml     # 固定 stable 工具链
 ├── pano.toml.example       # 配置模板（pano.toml 为本地配置，不入库）
 ├── AGENTS.md               # 开发与测试规范
 ├── crates/
-│   ├── pano-core/          # 核心：注册表、生命周期、样本存储、配置、一致性测试基座
-│   ├── pano-adapters/      # 内置适配器（每个适配器一个 feature）
-│   ├── pano-ui/            # egui 界面（声明 UISpec；仅读 core 公共 API）
-│   └── pano-app/           # 二进制入口：组装 core + adapters + ui
+│   ├── pano-core/          # 核心：注册表、生命周期、样本存储、配置、HttpClient 抽象、一致性测试基座
+│   ├── pano-adapters/      # 内置适配器（每个适配器一个 feature）+ remote/ 远程数据源基座
+│   ├── pano-window/        # 窗口服务：WindowService/WindowHandle/MonitorId/布局持久化（Tauri v2 实现）
+│   ├── pano-ui/            # Tauri 命令层 + 事件桥接 + 前端工程（web/，Svelte 5）
+│   └── pano-app/           # 二进制入口：组装 core + window + ui（Tauri 壳 / 托盘 / 布局写回）
 └── docs/                   # 设计文档
 ```
