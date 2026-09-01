@@ -311,10 +311,18 @@ impl fmt::Debug for AdapterContext {
 /// - `stop` 必须干净退出（任务 join、资源释放）。
 ///
 /// `stop` 语义（一致性测试基座依赖）：
-/// - `stop` 返回后**不得再产出样本**——实现应在返回前等待任务真正结束
+/// - 从**非 tokio 运行时线程**调用（一致性测试线程、应用退出主线程）时，
+///   `stop` 返回后**不得再产出样本**——实现应阻塞等待任务真正结束
 ///   （如 `abort` 后 `block_on` join）；
-/// - `stop` 会在调用线程**阻塞**至任务结束：调用方不得处于 tokio 异步上下文，
-///   且运行时须存活（生命周期保证：`stop_all` 先于 runtime drop）。
+/// - 从 **tokio 运行时内**调用（async 命令路径，如启用 / 停用热生效）时，
+///   不得 `Handle::block_on`（会 panic「Cannot start a runtime from within
+///   a runtime」），仅 `abort` 即可：任务在下一 await 点被取消，至多
+///   1 个在途样本（环形缓冲丢弃，UI 侧无害）。若 `restart_adapter`
+///   （运行时内 stop → start 紧邻）旧任务的在途样本与新任务并存，属同款
+///   可接受取舍；
+/// - 实现可借助 `Handle::try_current()` 区分两种上下文（见
+///   `pano-adapters::util::shutdown_task` / roadmap §M2.1）；
+/// - 运行时须存活（生命周期保证：`stop_all` 先于 runtime drop）。
 pub trait Adapter: Send + Sync {
     /// 元信息（含唯一 id）。
     fn meta(&self) -> AdapterMeta;

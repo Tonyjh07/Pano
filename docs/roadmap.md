@@ -98,6 +98,19 @@
 - 磁盘 / 网络设备集合依赖平台差异，`device` / `interface` 过滤子串可能命中多个设备；跨平台行为待实机验证；
 - 仪表盘正式化（多面板布局、速率图）、CI `cargo audit` 归后续。
 
+## M2.1 —— 修复与窗口管理（用户新需求）
+
+- 适配器 `stop()` 在 tokio 运行时内不再 panic（启用 / 停用热生效路径）✅
+- 管理窗口窗口管理功能：新建 / 分配适配器 / 切换适配器 / 隐藏 / 销毁窗口；
+- 托盘窗口列表动态化（取代静态「监控组件窗口」项）。
+
+**实现说明 / 遗留（stop 运行时上下文修复，诊断记录）**：
+
+- **根因**：`set_adapter_enabled` / `set_adapter_sampling` / `restart_adapter`（pano-ui `commands.rs`，均为 async Tauri 命令）运行于 tokio 运行时 worker 线程内，命令链 `apply_config → Lifecycle::apply_adapter_config → adapter.stop()` 中，各适配器 `stop()` 原实现调用 `Handle::block_on(task)`——在运行时内调用 `Handle::block_on` 必 panic（「Cannot start a runtime from within a runtime」），用户实测启用 / 禁用适配器即触发；
+- **修复**：新增 `pano-adapters::util::shutdown_task`，`abort` 后用 `Handle::try_current()` 区分上下文——非运行时线程（一致性测试 / 应用退出主线程）走 `block_on` 阻塞等待（保持「stop 后不再产出样本」语义）；运行时内（async 命令路径）仅 `abort`（任务在下一 await 点被取消，至多 1 个在途样本，环形缓冲丢弃，UI 侧无害）；
+- **回归测试**：`shutdown_task` 单测覆盖「运行时内调用 stop 不 panic 且任务被取消」（一致性测试走非运行时线程路径，无法覆盖运行时内分支，故补专门测试）；
+- 全局 `block_in_place` 仍未在任务内使用（遵守 §M2 教训）；本次修复在 `stop()` 内、用 `try_current` 区分上下文，不涉 time driver 关闭竞态。
+
 ## M3 —— 增强与打磨
 
 - 配置热重载完善（自定义参数变更 + 回滚机制）；

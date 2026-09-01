@@ -10,6 +10,9 @@
 
 pub mod remote;
 
+/// 适配器共享工具（stop 的运行时上下文安全 join，见 roadmap §M2.1）。
+pub(crate) mod util;
+
 /// 系统监控适配器（M2，仅 Windows / Linux / macOS；其余平台不注册）。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod sys;

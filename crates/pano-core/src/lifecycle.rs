@@ -333,10 +333,13 @@ mod tests {
         }
 
         fn stop(&mut self) -> Result<(), AdapterError> {
-            // 阻塞等待任务真正结束（与示例适配器一致），消除 abort-only 竞态。
+            // 与各适配器一致：非运行时线程阻塞等待（消除 abort-only 竞态）；
+            // 运行时内（async 命令路径）仅 abort，避免 block_on panic。
             if let Some(task) = self.task.take() {
                 task.abort();
-                if let Some(rt) = &self.runtime {
+                if tokio::runtime::Handle::try_current().is_err()
+                    && let Some(rt) = &self.runtime
+                {
                     let _ = rt.block_on(task);
                 }
             }
