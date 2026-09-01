@@ -142,14 +142,10 @@ impl Adapter for ExampleSine {
     }
 
     fn stop(&mut self) -> Result<(), AdapterError> {
-        if let Some(task) = self.task.take() {
-            task.abort();
-            // abort 是异步的：阻塞等待任务真正结束，保证 stop 返回后不再产出样本
-            //（一致性测试「生命周期检查」依赖此语义）。
-            if let Some(rt) = &self.runtime {
-                let _ = rt.block_on(task);
-            }
-        }
+        // 上下文安全的 join：非运行时线程阻塞等待；运行时内（async 命令路径）
+        // 仅 abort 不 block_on（避免「Cannot start a runtime from within a
+        // runtime」panic），见 util::shutdown_task / roadmap §M2.1。
+        crate::util::shutdown_task(self.task.take(), self.runtime.as_ref());
         self.status = AdapterStatus::Stopped;
         tracing::info!(target: "pano::adapters::example_sine", "适配器已停止");
         Ok(())
