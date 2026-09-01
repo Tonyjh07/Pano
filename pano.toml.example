@@ -8,20 +8,57 @@ schema_version = 1
 sampling_ms = 500
 
 # 每个适配器一段；固定字段：enabled、sampling；其余为该适配器自定义字段
-[adapters."example.counter"]
-enabled = true
-sampling = 200
-step = 1.5
+# M2 起默认特性为系统监控适配器（spec §5），示例 / 远程适配器需显式启用对应 feature 并在此配置
 
-[adapters."example.sine"]
+# --- 系统监控（默认 feature）---
+[adapters."sys.cpu"]
 enabled = true
-sampling = 200
-amplitude = 1.0
-frequency = 1.0
+sampling = 500
+# per_core = true   # 额外推送各核心使用率（sys.cpu.cores，JSON）
+
+[adapters."sys.mem"]
+enabled = true
+sampling = 500
+# swap = true       # 额外推送交换分区使用率（sys.mem.swap_percent）
+
+[adapters."sys.disk"]
+enabled = true
+sampling = 1000
+# device = "C:"     # 仅统计磁盘名 / 挂载点包含该子串的设备
+
+[adapters."sys.net"]
+enabled = true
+sampling = 1000
+# interface = "eth" # 仅统计网卡名包含该子串的接口
+
+# --- 示例适配器（需 `--features adapter-example-*`）---
+# [adapters."example.counter"]
+# enabled = true
+# sampling = 200
+# step = 1.5
+#
+# [adapters."example.sine"]
+# enabled = true
+# sampling = 200
+# amplitude = 1.0
+# frequency = 1.0
+
+# --- 远程数据源示例（规划中：M2 远程示例适配器 `adapter-remote-http-sample` /
+#     `adapter-remote-ws-sample` 尚未实现，feature 尚不存在；实现后按此配置）---
+# [adapters."remote.http-sample"]
+# enabled = true
+# sampling = 1000
+# url = "http://127.0.0.1:9000/value"   # 必填：GET 端点，返回 JSON，取 `value` 字段
+# # headers = '{"Authorization": "Bearer xxx"}'   # 可选：附加请求头（JSON 文本）
+#
+# [adapters."remote.ws-sample"]
+# enabled = true
+# sampling = 1000                          # 推送节流周期（高频消息按此合并）
+# url = "ws://127.0.0.1:9001/stream"       # 必填：WebSocket 端点，推送 JSON 文本，取 `value` 字段
 
 # 窗口布局持久化（由窗口服务读写，见架构 §13）；每窗口一段，id 与组件 id 一致
 # position / size 为逻辑像素；monitor 为显示器序列化标识（如 "primary" / 自定义编号）
-# [window."counter-chart"]
+# [window."dashboard"]
 # position = [120.0, 80.0]
-# size = [480.0, 320.0]
+# size = [1000.0, 640.0]
 # monitor = "primary"

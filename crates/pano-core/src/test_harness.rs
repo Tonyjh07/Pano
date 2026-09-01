@@ -9,10 +9,18 @@
 //! ```ignore
 //! #[test]
 //! fn conformance() {
-//!     pano_core::test_harness::run_all(&mut adapter, valid_config, sampling, invalid_config)
-//!         .expect("一致性测试失败");
+//!     pano_core::test_harness::run_all(
+//!         &mut adapter,
+//!         &[SeriesId::new(&adapter.meta().id, "value")], // 主 series（适配器必推指标）
+//!         valid_config, sampling, invalid_config,
+//!     )
+//!     .expect("一致性测试失败");
 //! }
 //! ```
+//!
+//! `series` 传入本适配器**必推**的一个或多个指标（如 `sys.cpu` 传 `usage`）；
+//! 采样周期与 stop 后不再产出检查以第一个 series 为准（多 series 适配器只要
+//! 主指标满足即可，可选指标如 `per_core` 关闭时不产出属正常）。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,16 +34,19 @@ use crate::sample_store::SampleStore;
 /// 运行全部一致性检查；返回 `Err` 时携带失败详情（供测试断言）。
 pub fn run_all(
     adapter: &mut dyn Adapter,
+    series: &[SeriesId],
     valid_config: HashMap<String, ConfigValue>,
     sampling: Duration,
     invalid_config: HashMap<String, ConfigValue>,
 ) -> Result<(), String> {
+    let primary = series
+        .first()
+        .ok_or_else(|| "需至少传入一个待检查的 series（适配器必推指标）".to_string())?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("创建 tokio runtime 失败：{e}"))?;
     let store = Arc::new(SampleStore::with_capacity(64));
-    let series = SeriesId::new(&adapter.meta().id, "value");
 
     // 1. 生命周期 + 2. 采样周期
     let sink = SampleSink::new({
@@ -59,9 +70,21 @@ pub fn run_all(
         ));
     }
 
-    // 等待若干周期后检查样本数量与平均间隔
-    std::thread::sleep(sampling * 5);
-    let samples = store.history(&series, usize::MAX);
+    // 等待样本积累：轮询直到主 series 达到 3 个样本，或超时退出。
+    // 适配器可能有冷启动延迟（如 sysinfo 首次刷新约 1s，见 roadmap §M2），
+    // 故用轮询而非固定 sleep(sampling * 5)，避免首样本延迟导致误判。
+    let deadline = std::time::Instant::now()
+        + std::cmp::max(sampling.saturating_mul(8), Duration::from_secs(3));
+    loop {
+        if store.history(primary, usize::MAX).len() >= 3 {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let samples = store.history(primary, usize::MAX);
     if samples.len() < 3 {
         return Err(format!(
             "样本数量不足：期望 >= 3，实际 {}（采样周期检查）",
@@ -92,9 +115,9 @@ pub fn run_all(
     ) {
         return Err(format!("stop 后状态异常：{}", adapter.status()));
     }
-    let before = store.history(&series, usize::MAX).len();
+    let before = store.history(primary, usize::MAX).len();
     std::thread::sleep(sampling * 2);
-    let after = store.history(&series, usize::MAX).len();
+    let after = store.history(primary, usize::MAX).len();
     if after != before {
         return Err(format!(
             "stop 后仍在产出样本（生命周期检查）：{before} -> {after}"

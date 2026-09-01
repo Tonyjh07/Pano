@@ -7,11 +7,20 @@ repository.workspace = true
 description = "Pano 内置适配器集合，每适配器一个 feature"
 
 [features]
-# M1 默认启用示例适配器（spec §5）；M2 起默认系统监控适配器
-default = ["adapter-example-counter", "adapter-example-sine"]
+# M2 起默认只含系统监控适配器（spec §5：M1 默认示例适配器，M2 起默认系统监控）
+default = [
+    "adapter-sys-cpu",
+    "adapter-sys-mem",
+    "adapter-sys-disk",
+    "adapter-sys-net",
+]
+adapter-sys-cpu = ["dep:sysinfo", "dep:serde_json"]
+adapter-sys-mem = ["dep:sysinfo"]
+adapter-sys-disk = ["dep:sysinfo"]
+adapter-sys-net = ["dep:sysinfo"]
 adapter-example-counter = []
 adapter-example-sine = []
-# 远程数据源共享基座（M1.2 R3 预留，架构 §14）；具体远程适配器归 M2+
+# 远程数据源共享基座（M1.2 R3 预留，架构 §14）；具体远程适配器（M2）
 remote = ["remote-http", "remote-ws"]
 remote-http = ["dep:reqwest"]
 remote-ws = ["dep:tokio-tungstenite", "dep:futures-util"]
@@ -20,6 +29,8 @@ remote-ws = ["dep:tokio-tungstenite", "dep:futures-util"]
 pano-core.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+serde_json = { version = "1", optional = true }
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network"], optional = true }
 reqwest = { version = "0.12", optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
 futures-util = { version = "0.3", optional = true }

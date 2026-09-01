@@ -81,11 +81,22 @@
 
 ## M2 —— 监控适配器与仪表盘
 
-- 系统监控适配器：`sys.cpu`、`sys.mem`、`sys.disk`、`sys.net`（按平台条件编译）；
+- 系统监控适配器：`sys.cpu`、`sys.mem`、`sys.disk`、`sys.net`（按平台条件编译，共用 `sysinfo`，Windows / Linux / macOS）；✅
+- 默认特性切换为系统监控适配器（spec §5：M2 起默认只含系统监控适配器）；✅
+- 一致性测试基座适配多 series 适配器（`run_all` 增加 series 参数，轮询等待首样本）；✅
 - 远程数据源示例适配器（复用 M1.2 基座，如 HTTP 轮询型 / WebSocket 推送型各一个示例）；
 - 仪表盘正式化：多面板布局、速率图 / 曲线；
 - CI 门禁（fmt / clippy / test / audit）；前端 Vitest + 命令层单测；
 - 主题切换落地。
+
+**实现说明 / 遗留（sys 适配器采样节奏，诊断记录）**：
+
+- **sysinfo 首次刷新慢**：Windows 实测 CPU `refresh_cpu_usage()` 首次约 1s（冷启动）。适配器在 `start` 中**预热**刷新一次（丢弃结果），避免冷启动延迟污染采样节奏；
+- **interval 补爆**：`tokio::time::interval` 默认 `MissedTickBehavior::Burst` 会一次性**补发**错过的 tick（一次慢阻塞后连续补发）→ 采样间隔失真（实测 5.8ms vs 期望 200ms）；sys 适配器统一 `Skip`；
+- **不用 `block_in_place`**：sys 适配器任务内不调用 `tokio::task::block_in_place`（短阻塞直接同步调用）——block_in_place 与 time driver 在运行时关闭时存在竞态 panic（「A Tokio 1.x context was found, but it is being shutdown」），workspace 并行测试时触发；
+- **一致性测试基座**：`run_all` 从「固定查 `<adapter>.value`」改为接收 series 参数（主指标），并**轮询等待**主 series 达 3 样本（超时 = `max(sampling*8, 3s)`），吸收首样本延迟；
+- 磁盘 / 网络设备集合依赖平台差异，`device` / `interface` 过滤子串可能命中多个设备；跨平台行为待实机验证；
+- 仪表盘正式化（多面板布局、速率图）、CI `cargo audit` 归后续。
 
 ## M3 —— 增强与打磨
 

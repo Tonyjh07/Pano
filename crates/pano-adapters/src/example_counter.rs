@@ -166,7 +166,14 @@ mod tests {
         valid.insert(KEY_STEP.to_string(), ConfigValue::Number(2.0));
         let mut invalid = HashMap::new();
         invalid.insert(KEY_STEP.to_string(), ConfigValue::Number(0.0));
-        pano_core::test_harness::run_all(&mut adapter, valid, Duration::from_millis(50), invalid)
-            .expect("一致性测试失败");
+        let series = SeriesId::new(&adapter.meta().id, METRIC);
+        pano_core::test_harness::run_all(
+            &mut adapter,
+            &[series],
+            valid,
+            Duration::from_millis(50),
+            invalid,
+        )
+        .expect("一致性测试失败");
     }
 }
