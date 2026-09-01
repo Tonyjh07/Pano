@@ -1,6 +1,19 @@
 # Changelog
 
-## [0.1.0] — M1.x 开发期（未发布）
+## [0.1.0] — M1.x / M2 开发期（未发布）
+
+### M2 系统监控适配器（分支 m1.2，开发中）
+
+- **新增 `sys.cpu` / `sys.mem` / `sys.disk` / `sys.net` 系统监控适配器**：共用
+  `sysinfo`，按平台条件编译（Windows / Linux / macOS）；自定义字段
+  （`per_core` / `swap` / `device` / `interface`）经 `config_schema` 渲染。
+- **默认特性切换**：`pano-app` / `pano-adapters` 默认只含系统监控适配器（spec §5）；
+  示例 / 远程适配器需显式 feature 启用。
+- **一致性测试基座适配多 series**：`run_all` 增加 series 参数（主指标），轮询
+  等待首样本（超时 = `max(sampling*8, 3s)`），适配 sysinfo 首次刷新冷启动延迟。
+- **sys 适配器采样节奏修复**（诊断记录见 roadmap §M2）：`start` 预热刷新；
+  interval 用 `MissedTickBehavior::Skip`（避免补爆）；任务内不用 `block_in_place`
+  （避免与 time driver 的运行时关闭竞态 panic）。
 
 ### M1.2 架构重构：Tauri 迁移 + 窗口服务 + 远程数据源预留（分支 m1.2）
 

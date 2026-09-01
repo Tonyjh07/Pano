@@ -9,7 +9,12 @@ description = "Pano 二进制入口：组装 core + 窗口服务 + ui（Tauri v2
 # 透传适配器 feature 到 pano-adapters（spec §5）：
 # 用户通过 `cargo build --features ...` 决定打进哪些适配器
 [features]
-default = ["adapter-example-counter", "adapter-example-sine"]
+# M2 起默认只含系统监控适配器（spec §5）
+default = ["adapter-sys-cpu", "adapter-sys-mem", "adapter-sys-disk", "adapter-sys-net"]
+adapter-sys-cpu = ["pano-adapters/adapter-sys-cpu"]
+adapter-sys-mem = ["pano-adapters/adapter-sys-mem"]
+adapter-sys-disk = ["pano-adapters/adapter-sys-disk"]
+adapter-sys-net = ["pano-adapters/adapter-sys-net"]
 adapter-example-counter = ["pano-adapters/adapter-example-counter"]
 adapter-example-sine = ["pano-adapters/adapter-example-sine"]
 
