@@ -1,16 +1,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type AdapterInfo, type WindowInfo } from "../../lib/api";
+  import { api, type ComponentInfo, type WindowInfo } from "../../lib/api";
 
   let { notify }: { notify: (kind: "ok" | "error", text: string) => void } = $props();
 
   let windows: WindowInfo[] = $state([]);
-  let adapters: AdapterInfo[] = $state([]);
+  let components: ComponentInfo[] = $state([]);
   let loading = $state(true);
 
-  // 新建窗口表单
+  // 新建窗口 / 切换组件 表单
   const draft = $state({ id: "", title: "" });
-  const selected = $state<Record<string, boolean>>({});
+  let selectedComponent = $state("");
   const busy = new Set<string>();
 
   async function refresh() {
@@ -26,25 +26,24 @@
   onMount(() => {
     refresh();
     api
-      .listAdapters()
-      .then((a) => {
-        adapters = a;
-        // 默认勾选第一个适配器的全部 series（简化「分配适配器」）
-        if (a.length > 0) {
-          for (const s of a[0].series) selected[s] = true;
-        }
+      .listComponents()
+      .then((cs) => {
+        components = cs;
+        // 默认选中第一个可用组件（不可用组件置灰不可选）
+        const first = cs.find((c) => c.available) ?? cs[0];
+        selectedComponent = first?.id ?? "";
       })
-      .catch((e) => notify("error", `读取适配器失败：${e}`));
+      .catch((e) => notify("error", `读取组件目录失败：${e}`));
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   });
 
-  function toggleSeries(s: string) {
-    selected[s] = !selected[s];
+  function componentName(id: string): string {
+    return components.find((c) => c.id === id)?.name ?? id;
   }
 
-  function selectedSeries(): string[] {
-    return Object.keys(selected).filter((s) => selected[s]);
+  function componentAvailable(id: string): boolean {
+    return components.find((c) => c.id === id)?.available ?? false;
   }
 
   async function run(id: string, action: string, fn: () => Promise<void>) {
@@ -62,17 +61,17 @@
   }
 
   async function create() {
-    const series = selectedSeries();
-    if (!draft.id.trim()) return notify("error", "窗口 id 不能为空");
-    if (series.length === 0) return notify("error", "请至少勾选一个 series（分配适配器）");
     const id = draft.id.trim();
-    await run(id, "新建", () =>
-      api.createWindow(id, draft.title.trim() || id, series),
-    );
+    if (!id) return notify("error", "窗口 id 不能为空");
+    if (!selectedComponent) return notify("error", "请先选择组件");
+    if (!componentAvailable(selectedComponent)) {
+      return notify("error", "所选组件依赖的适配器未注册，不可用");
+    }
+    const title = draft.title.trim() || undefined;
+    await run(id, "新建", () => api.createWindow(id, selectedComponent, title));
     if (!busy.has(id)) {
       draft.id = "";
       draft.title = "";
-      for (const s of Object.keys(selected)) selected[s] = false;
     }
   }
 
@@ -82,11 +81,16 @@
     );
   }
 
-  /** 切换适配器：用当前「新建」勾选集合替换该窗口的 series。 */
-  function switchSeries(w: WindowInfo) {
-    const series = selectedSeries();
-    if (series.length === 0) return notify("error", "请先勾选目标 series");
-    void run(w.id, "切换 series", () => api.setWindowSeries(w.id, series));
+  /** 切换组件：把表单选中的组件类型应用到目标窗口（仅换内容 / series，标题不动）。 */
+  function switchComponent(w: WindowInfo) {
+    if (!selectedComponent) return notify("error", "请先选择目标组件");
+    if (!componentAvailable(selectedComponent)) {
+      return notify("error", "所选组件依赖的适配器未注册，不可用");
+    }
+    if (selectedComponent === w.component) {
+      return notify("error", "目标窗口已是该组件");
+    }
+    void run(w.id, "切换组件", () => api.setWindowComponent(w.id, selectedComponent));
   }
 
   function destroy(w: WindowInfo) {
@@ -101,7 +105,8 @@
   <section>
     <h2>窗口管理</h2>
     <p class="dim">
-      管理窗口固定存在、不可销毁；监控窗口可新建 / 分配适配器 / 切换 series / 隐藏 / 销毁。
+      每个监控窗口分配一个 UI 组件（自带固定 series）；可新建、切换组件、隐藏 / 销毁。
+      管理窗口固定存在、不可销毁。
     </p>
 
     <div class="grid">
@@ -114,6 +119,7 @@
             <thead>
               <tr>
                 <th>窗口</th>
+                <th>组件</th>
                 <th>series</th>
                 <th>可见</th>
                 <th>操作</th>
@@ -125,41 +131,50 @@
                   <td>
                     <div class="win-title">
                       {w.title}
-                      {#if w.is_manager}<span class="tag">管理</span>{/if}
+                      {#if w.is_manager}
+                        <span class="tag">管理</span>
+                      {/if}
                     </div>
-                    <div class="win-id">{w.id}</div>
+                    <div class="mono dim">{w.id}</div>
                   </td>
                   <td>
-                    {#if w.series.length === 0}
-                      <span class="dim">—</span>
+                    {#if w.component}
+                      <span title={componentName(w.component)}>{componentName(w.component)}</span>
                     {:else}
-                      <div class="series-list">
-                        {#each w.series as s}
-                          <span class="series">{s}</span>
-                        {/each}
-                      </div>
+                      <span class="dim">—</span>
                     {/if}
                   </td>
                   <td>
-                    <span class={w.visible ? "ok" : "dim"}>{w.visible ? "显示" : "隐藏"}</span>
+                    <div class="series-list">
+                      {#if w.series.length === 0}
+                        <span class="dim">无</span>
+                      {:else}
+                        {#each w.series as s}
+                          <span class="mono dim">{s}</span>
+                        {/each}
+                      {/if}
+                    </div>
                   </td>
                   <td>
-                    <div class="actions">
-                      <button disabled={busy.has(w.id)} onclick={() => toggleVisible(w)}>
+                    <span class:off={!w.visible}>{w.visible ? "显示" : "隐藏"}</span>
+                  </td>
+                  <td>
+                    <div class="row-actions">
+                      <button onclick={() => toggleVisible(w)} disabled={busy.has(w.id)}>
                         {w.visible ? "隐藏" : "显示"}
                       </button>
                       {#if !w.is_manager}
                         <button
-                          disabled={busy.has(w.id)}
-                          onclick={() => switchSeries(w)}
-                          title="用右侧勾选的 series 替换该窗口内容"
+                          onclick={() => switchComponent(w)}
+                          disabled={busy.has(w.id) || !selectedComponent}
+                          title="用右侧表单选中的组件替换本窗口内容"
                         >
-                          切换 series
+                          切换组件
                         </button>
                         <button
                           class="danger"
-                          disabled={busy.has(w.id)}
                           onclick={() => destroy(w)}
+                          disabled={busy.has(w.id)}
                         >
                           销毁
                         </button>
@@ -174,51 +189,47 @@
       </div>
 
       <div class="panel">
-        <h3>新建窗口 / 分配适配器</h3>
-        <label class="field">
-          窗口 id（全小写 ASCII、连字符）
+        <h3>新建窗口 / 切换组件</h3>
+        <p class="dim">
+          选择组件后「新建」；或对列表中的监控窗口点「切换组件」应用所选组件。
+          组件自带固定 series；依赖适配器未注册（feature 未编译）的组件置灰不可选。
+        </p>
+
+        <div class="field">
+          <label for="wm-win-id">窗口 id（新建）</label>
           <input
-            placeholder="如 system-cpu"
+            id="wm-win-id"
             bind:value={draft.id}
+            placeholder="如 cpu-monitor（全小写连字符）"
             onkeydown={(e) => e.key === "Enter" && create()}
           />
-        </label>
-        <label class="field">
-          标题（可选，默认 = id）
-          <input placeholder="如 系统 CPU" bind:value={draft.title} />
-        </label>
-
-        <div class="adapter-group">
-          {#if adapters.length === 0}
-            <p class="dim">没有可用适配器。</p>
-          {:else}
-            {#each adapters as a (a.id)}
-              <details class="adapter" open={a === adapters[0]}>
-                <summary>
-                  <span class="adapter-name">{a.name}</span>
-                  <span class="adapter-id">{a.id}</span>
-                </summary>
-                {#if a.series.length === 0}
-                  <p class="dim">该适配器未声明输出 series。</p>
-                {:else}
-                  {#each a.series as s}
-                    <label class="checkbox">
-                      <input
-                        type="checkbox"
-                        checked={!!selected[s]}
-                        onchange={() => toggleSeries(s)}
-                      />
-                      <span class="mono">{s}</span>
-                    </label>
-                  {/each}
-                {/if}
-              </details>
+        </div>
+        <div class="field">
+          <label for="wm-win-title">标题（可选，缺省 = 组件默认标题）</label>
+          <input id="wm-win-title" bind:value={draft.title} placeholder="留空使用组件默认标题" />
+        </div>
+        <div class="field">
+          <label for="wm-component">UI 组件</label>
+          <select id="wm-component" bind:value={selectedComponent}>
+            {#each components as c}
+              <option value={c.id} disabled={!c.available}>
+                {c.name}（{c.id}）{#if !c.available}— 适配器未注册{/if}
+              </option>
             {/each}
+          </select>
+          {#if selectedComponent}
+            <p class="dim small">
+              该组件 series：
+              {#if (components.find((c) => c.id === selectedComponent)?.series ?? []).length === 0}
+                无
+              {:else}
+                {(components.find((c) => c.id === selectedComponent)?.series ?? []).join("、")}
+              {/if}
+            </p>
           {/if}
         </div>
-
         <div class="form-actions">
-          <button class="primary" onclick={() => create()} disabled={selectedSeries().length === 0}>
+          <button class="primary" onclick={create} disabled={!selectedComponent}>
             新建窗口
           </button>
         </div>
@@ -228,15 +239,24 @@
 {/if}
 
 <style>
+  section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
   h2 {
-    margin-top: 0;
+    font-size: 16px;
   }
   .dim {
     color: var(--text-dim);
   }
+  .small {
+    font-size: 12px;
+    margin-top: 4px;
+  }
   .grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 320px;
     gap: 12px;
     align-items: start;
   }
@@ -244,88 +264,82 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 12px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  h3 {
+    font-size: 14px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    font-size: 12px;
+    color: var(--text-dim);
   }
   .win-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-weight: 600;
   }
-  .win-id,
-  .adapter-id {
-    color: var(--text-dim);
-    font-family: var(--mono);
-    font-size: 11px;
-  }
   .tag {
-    margin-left: 4px;
-    padding: 0 6px;
-    border-radius: var(--radius);
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    font-size: 11px;
-  }
-  .series-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  .series {
-    padding: 1px 6px;
-    border-radius: var(--radius);
+    background: var(--panel-2);
     border: 1px solid var(--border);
-    font-family: var(--mono);
+    border-radius: 4px;
+    padding: 0 5px;
     font-size: 11px;
     color: var(--text-dim);
-  }
-  .ok {
-    color: var(--ok);
-  }
-  .actions {
-    display: flex;
-    gap: 4px;
-    flex-wrap: wrap;
-  }
-  .actions .danger {
-    border-color: var(--err);
-    color: var(--err);
-  }
-  .field {
-    display: block;
-    margin-bottom: 8px;
-    color: var(--text-dim);
-    font-size: 12px;
-  }
-  .field input {
-    display: block;
-    width: 100%;
-    margin-top: 4px;
-  }
-  .adapter-group {
-    margin-top: 8px;
-    border-top: 1px solid var(--border);
-    padding-top: 8px;
-  }
-  .adapter {
-    margin-bottom: 6px;
-  }
-  .adapter summary {
-    cursor: pointer;
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-  }
-  .checkbox {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    padding: 2px 0 2px 16px;
-    cursor: pointer;
   }
   .mono {
     font-family: var(--mono);
     font-size: 12px;
   }
+  .series-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .off {
+    color: var(--text-dim);
+  }
+  .row-actions {
+    display: flex;
+    gap: 4px;
+  }
+  button {
+    padding: 3px 8px;
+    font-size: 12px;
+  }
+  .danger {
+    color: var(--err);
+    border-color: var(--err);
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .field label {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .field input,
+  .field select {
+    width: 100%;
+  }
   .form-actions {
-    margin-top: 10px;
+    margin-top: 6px;
   }
   .primary {
     background: var(--accent);

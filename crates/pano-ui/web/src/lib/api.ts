@@ -50,9 +50,26 @@ export interface MonitorInfo {
 export interface WindowInfo {
   id: string;
   title: string;
+  /** 绑定的 UI 组件类型 id（管理窗口为空串）。 */
+  component: string;
+  /** 该窗口展示的 series（由组件目录解析，管理窗口为空）。 */
   series: string[];
   is_manager: boolean;
   visible: boolean;
+}
+
+export interface ComponentInfo {
+  id: string;
+  name: string;
+  /** 本组件固定消费的 series。 */
+  series: string[];
+  /** 是否可用（全部 series 所属适配器已注册）；未注册组件置灰不可选。 */
+  available: boolean;
+}
+
+export interface WindowContent {
+  component: string;
+  series: string[];
 }
 
 /** 命令封装：参数名用 camelCase，Tauri 自动映射为 Rust 的 snake_case。 */
@@ -74,7 +91,9 @@ export const api = {
 
   seriesLatest: (series: string) => invoke<SampleEvent | null>("series_latest", { series }),
 
-  componentSeries: (id: string) => invoke<string[]>("component_series", { id }),
+  listComponents: () => invoke<ComponentInfo[]>("list_components"),
+
+  windowContent: (id: string) => invoke<WindowContent>("window_content", { id }),
 
   windowSetFullscreen: (label: string, enabled: boolean) =>
     invoke<void>("window_set_fullscreen", { label, enabled }),
@@ -91,11 +110,13 @@ export const api = {
 
   listWindows: () => invoke<WindowInfo[]>("list_windows"),
 
-  createWindow: (id: string, title: string, series: string[]) =>
-    invoke<void>("create_window", { id, title, series }),
+  /** 新建监控窗口并绑定一个 UI 组件（标题缺省取组件默认标题）。 */
+  createWindow: (id: string, component: string, title?: string) =>
+    invoke<void>("create_window", { id, component, title }),
 
-  setWindowSeries: (id: string, series: string[]) =>
-    invoke<void>("set_window_series", { id, series }),
+  /** 切换窗口绑定的 UI 组件（仅换内容 / series，标题与几何不动）。 */
+  setWindowComponent: (id: string, component: string) =>
+    invoke<void>("set_window_component", { id, component }),
 
   destroyWindow: (id: string) => invoke<void>("destroy_window", { id }),
 

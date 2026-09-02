@@ -5,16 +5,17 @@
 //! 侧经 `save_config` 回调注入，保证与 core 热重载写文件串行协调
 //! （架构 §13：段级合并，避免并发写）。
 //!
-//! 窗口管理（M2.1）：运行时窗口注册表 [`AppState::windows`] 是「当前
-//! 存在哪些监控窗口」的唯一来源。启动时由 pano-app 从 `UISpec.components`
-//! 播种（连同固定管理窗口），随后「窗口管理」命令层在此增删改；托盘
-//! 「窗口列表」经 [`RefreshTrayFn`] 回调据此重建。
+//! 窗口管理（M2.1 + M2.2）：运行时窗口注册表 [`AppState::windows`] 是「当前
+//! 存在哪些监控窗口」的唯一来源。启动时由 pano-app 从组件目录 / 持久化集合
+//! 播种（连同固定管理窗口），随后「窗口管理」命令层在此增删改；托盘「窗口
+//! 列表」经 [`RefreshTrayFn`] 回调据此重建。每个窗口为**组件类型实例**：
+//! 只存 `{ title, component }`，展示的 series 由组件目录（`UISpec.components`）
+//! 解析（M2.2，架构 §7）。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use pano_core::adapter::SeriesId;
 use pano_core::capability::UISpec;
 use pano_core::config::WindowLayout;
 use pano_core::lifecycle::Lifecycle;
@@ -27,13 +28,13 @@ pub type SaveConfigFn = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
 /// 托盘「窗口列表」重建回调（pano-app 注入；窗口增删后调用）。
 pub type RefreshTrayFn = Arc<dyn Fn() + Send + Sync>;
 
-/// 运行时窗口注册表条目：窗口 id → 内容（标题 + 展示的 series）。
+/// 运行时窗口注册表条目：窗口 id → 内容（标题 + 绑定的组件类型 id）。
 #[derive(Debug, Clone)]
 pub struct WindowEntry {
-    /// 窗口标题。
+    /// 窗口标题（独立属性，切换组件不改变）。
     pub title: String,
-    /// 该窗口展示的 series（可跨适配器）。
-    pub series: Vec<SeriesId>,
+    /// 绑定的 UI 组件类型 id（`UISpec.components` 之一；管理窗口为空串）。
+    pub component: String,
 }
 
 /// pano-app 装配的共享状态。
@@ -44,11 +45,11 @@ pub struct AppState {
     pub store: Arc<SampleStore>,
     /// 窗口服务（窗口控制一律经此，命令层不接触 Tauri 窗口类型）。
     pub window_service: Arc<dyn WindowService>,
-    /// 本 UI 的能力与组件声明（启动播种窗口注册表；此后以注册表为准）。
+    /// 本 UI 的能力与组件目录（`components` = 组件类型清单；窗口 series 由此解析）。
     pub ui_spec: UISpec,
     /// pano.toml 路径（供展示）。
     pub config_path: PathBuf,
-    /// 写回 pano.toml 的回调（热生效成功后调用）。
+    /// 写回 pano.toml 的回调（热生效 / 窗口集合变化后调用）。
     pub save_config: SaveConfigFn,
     /// 窗口布局记忆（运行时内存，写回 pano.toml 由 pano-app 串行协调）。
     window_layouts: Arc<Mutex<HashMap<String, WindowLayout>>>,
@@ -69,6 +70,7 @@ impl AppState {
         config_path: PathBuf,
         save_config: SaveConfigFn,
         window_layouts: Arc<Mutex<HashMap<String, WindowLayout>>>,
+        windows: Arc<Mutex<HashMap<String, WindowEntry>>>,
     ) -> Self {
         Self {
             lifecycle,
@@ -78,7 +80,7 @@ impl AppState {
             config_path,
             save_config,
             window_layouts,
-            windows: Arc::new(Mutex::new(HashMap::new())),
+            windows,
             refresh_tray: Arc::new(Mutex::new(None)),
         }
     }

@@ -79,12 +79,32 @@ pub struct MonitorDto {
 pub struct WindowInfoDto {
     pub id: String,
     pub title: String,
-    /// 该窗口展示的 series。
+    /// 绑定的 UI 组件类型 id（管理窗口为空串）。
+    pub component: String,
+    /// 该窗口展示的 series（由组件目录解析，管理窗口为空）。
     pub series: Vec<String>,
     /// 是否为固定管理窗口（不可销毁）。
     pub is_manager: bool,
     /// 当前是否可见。
     pub visible: bool,
+}
+
+/// UI 组件目录项（「窗口管理」页选组件用）。
+#[derive(Debug, Clone, Serialize)]
+pub struct ComponentInfo {
+    pub id: String,
+    pub name: String,
+    /// 本组件固定消费的 series。
+    pub series: Vec<String>,
+    /// 是否可用（全部 series 所属适配器已注册）；未注册（feature 未编译）置灰不可选。
+    pub available: bool,
+}
+
+/// 窗口当前内容（component + series；命令层按窗口 label 查询，ui.md §3.2）。
+#[derive(Debug, Clone, Serialize)]
+pub struct WindowContentDto {
+    pub component: String,
+    pub series: Vec<String>,
 }
 
 impl From<&pano_window::MonitorInfo> for MonitorDto {
