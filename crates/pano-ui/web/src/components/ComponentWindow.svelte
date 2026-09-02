@@ -2,13 +2,14 @@
   import { onMount, onDestroy } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { api, type MonitorInfo, type SampleEvent } from "../lib/api";
+  import { api, type MonitorInfo, type SampleEvent, type WindowContent } from "../lib/api";
   import { onSample } from "../lib/events";
-  import ValueCard from "./ValueCard.svelte";
-  import TimeSeriesChart from "./TimeSeriesChart.svelte";
+  import { resolveRenderer } from "./renderers";
 
-
-  /** 本组件消费的 series（来自 Rust UISpec，经命令层查询）。 */
+  // 窗口壳（ui.md §4，M2.2）：负责数据管道（窗口内容查询、series 订阅 / 缓冲），
+  // 渲染按组件类型 id 分派给对应渲染器（renderers.ts）。
+  let content: WindowContent | null = $state(null);
+  /** 本窗口消费的 series（由绑定的组件目录解析）。 */
   let seriesList: string[] = $state([]);
   /** series → 样本缓冲（最多 500 点，曲线画最近 300；$state 深响应）。 */
   let samplesBySeries = $state<Record<string, SampleEvent[]>>({});
@@ -16,17 +17,19 @@
   let latest = $state<Record<string, SampleEvent>>({});
   let error: string | null = $state(null);
   let unlisten: (() => void) | null = null;
-  let unlistenSeries: (() => void) | null = null;
+  let unlistenContent: (() => void) | null = null;
 
   // 窗口控制状态
   let pinned = $state(false);
   let fullscreen = $state(false);
   let monitors: MonitorInfo[] = $state([]);
 
-  /** 载入本窗口的 series 并订阅样本（「窗口管理」切换 series 后重载）。 */
+  /** 载入本窗口的内容（组件 + series）并订阅样本（切换组件后重载）。 */
   async function load(label: string) {
     unlisten?.();
-    seriesList = await api.componentSeries(label);
+    const c = await api.windowContent(label);
+    content = c;
+    seriesList = c.series;
     samplesBySeries = {};
     latest = {};
     for (const s of seriesList) {
@@ -34,7 +37,7 @@
       samplesBySeries[s] = hist;
       if (hist.length > 0) latest[s] = hist[hist.length - 1];
     }
-    // 事件订阅（ui.md §6）：按本组件 series 过滤；100ms 合并窗口
+    // 事件订阅（ui.md §6）：按本窗口 series 过滤；100ms 合并窗口
     unlisten = await onSample(
       (ev) => {
         latest[ev.series] = ev;
@@ -51,8 +54,8 @@
   onMount(async () => {
     const label = getCurrentWindow().label;
     try {
-      // 「窗口管理」切换 series 事件：重载本窗口内容
-      unlistenSeries = await listen<string[]>("pano://window-series", () => {
+      // 「窗口管理」切换组件事件：重载本窗口内容
+      unlistenContent = await listen<WindowContent>("pano://window-component", () => {
         void load(label).catch((e) => (error = String(e)));
       });
       await load(label);
@@ -64,7 +67,7 @@
 
   onDestroy(() => {
     unlisten?.();
-    unlistenSeries?.();
+    unlistenContent?.();
   });
 
   async function setPin(v: boolean) {
@@ -84,9 +87,12 @@
 
 {#if error}
   <div class="error-box">错误：{error}</div>
+{:else if !content}
+  <p class="dim load">加载中…</p>
 {:else}
   <div class="window">
     <header class="win-header">
+      <span class="component-name">{content.component || "（无组件）"}</span>
       <div class="controls">
         <button class:active={pinned} onclick={() => setPin(!pinned)} title="置顶">置顶</button>
         <button class:active={fullscreen} onclick={() => setFullscreen(!fullscreen)} title="全屏">
@@ -111,17 +117,8 @@
       {#if seriesList.length === 0}
         <p class="dim">该组件未声明任何 series（数据源未启用？见管理窗口）。</p>
       {:else}
-        {#each seriesList as series}
-          <section class="panel">
-            <ValueCard
-              title={series}
-              value={latest[series]?.value}
-            />
-            <div class="chart-wrap">
-              <TimeSeriesChart seriesName={series} samples={samplesBySeries[series] ?? []} />
-            </div>
-          </section>
-        {/each}
+        {@const Renderer = resolveRenderer(content.component)}
+        <Renderer seriesList={seriesList} samples={samplesBySeries} latest={latest} />
       {/if}
     </main>
   </div>
@@ -135,10 +132,15 @@
   }
   .win-header {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
+    align-items: center;
     padding: 6px 8px;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
+  }
+  .component-name {
+    color: var(--text-dim);
+    font-size: 12px;
   }
   .controls {
     display: flex;
@@ -157,20 +159,11 @@
     flex-direction: column;
     gap: 10px;
   }
-  .panel {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .chart-wrap {
-    height: 220px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 4px;
-  }
   .dim {
     color: var(--text-dim);
+  }
+  .load {
+    padding: 16px;
   }
   .error-box {
     margin: 16px;

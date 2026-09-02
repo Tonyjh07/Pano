@@ -20,10 +20,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use pano_core::config::{PanoConfig, WindowLayout};
+use pano_core::config::{PanoConfig, WindowConfig, WindowLayout};
 use pano_core::lifecycle::Lifecycle;
 use pano_core::registry::Registry;
-use pano_ui::state::{AppState, SaveConfigFn};
+use pano_ui::state::{AppState, SaveConfigFn, WindowEntry};
 use pano_window::tauri::TauriWindowService;
 use pano_window::{WindowService, persist};
 use tauri::Manager;
@@ -180,7 +180,10 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                 Arc::new(TauriWindowService::new(app.handle().clone()));
             let layouts: Arc<Mutex<HashMap<String, WindowLayout>>> =
                 Arc::new(Mutex::new(HashMap::new()));
-            let save_config = build_save_config(&setup_core, &config_path, &layouts);
+            // 运行时窗口注册表（「当前存在哪些窗口」唯一来源，M2.1/M2.2）
+            let windows: Arc<Mutex<HashMap<String, WindowEntry>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+            let save_config = build_save_config(&setup_core, &config_path, &layouts, &windows);
             app.manage(AppState::new(
                 Arc::clone(&setup_core),
                 store,
@@ -189,6 +192,7 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                 config_path.clone(),
                 save_config.clone(),
                 Arc::clone(&layouts),
+                Arc::clone(&windows),
             ));
 
             // 6b. 固定创建管理窗口（ui.md §2：1 个，页签 = 适配器 + 窗口 + 设置）
@@ -211,50 +215,119 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                 let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
                 windows.insert(
                     "manager".to_string(),
-                    pano_ui::state::WindowEntry {
+                    WindowEntry {
                         title: pano_ui::manager_window_spec().title,
-                        series: Vec::new(),
+                        component: String::new(),
                     },
                 );
             }
 
-            // 6c. 按 components 创建监控组件窗口（仅当组件的 series 存在数据源，
-            //     架构 §7「建窗时机」；无数据源组件不建窗），并计入运行时注册表
-            for component in &ui_spec.components {
-                let has_source = {
-                    let lc = setup_core.lock().unwrap_or_else(|e| e.into_inner());
-                    component
-                        .series
-                        .iter()
-                        .all(|s| lc.config().is_enabled(s.adapter_id().as_str()))
-                };
-                if !has_source {
-                    tracing::info!(
-                        target: "pano::app",
-                        component = %component.id,
-                        "组件无数据源（对应适配器未启用），跳过建窗"
-                    );
-                    continue;
+            // 6c. 监控窗口：按持久化窗口集合创建（[ui].windows，M2.2）；
+            //     段缺失（首次运行）→ 按组件目录播种（仅对应适配器已启用的组件），
+            //     随后写回窗口集合；已存在则按 id 恢复（组件绑定 + 布局 + 标题）。
+            let first_run = {
+                let lc = setup_core.lock().unwrap_or_else(|e| e.into_inner());
+                lc.config().ui_windows().is_none()
+            };
+            let persisted_ids: Vec<String> = {
+                let lc = setup_core.lock().unwrap_or_else(|e| e.into_inner());
+                lc.config().ui_windows().map(|v| v.to_vec()).unwrap_or_default()
+            };
+
+            if first_run {
+                // 首次运行：按组件目录播种（仅组件 series 对应适配器已启用）
+                for component in &ui_spec.components {
+                    let has_source = {
+                        let lc = setup_core.lock().unwrap_or_else(|e| e.into_inner());
+                        component
+                            .series
+                            .iter()
+                            .all(|s| lc.config().is_enabled(s.adapter_id().as_str()))
+                    };
+                    if !has_source {
+                        tracing::info!(
+                            target: "pano::app",
+                            component = %component.id,
+                            "组件无数据源（对应适配器未启用），首次播种跳过"
+                        );
+                        continue;
+                    }
+                    let layout = setup_core
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .config()
+                        .window_layout(&component.id)
+                        .cloned();
+                    window_service
+                        .create_window(&component.id, &component.window, layout.as_ref())
+                        .map_err(|e| anyhow::anyhow!("创建组件窗口 {} 失败：{e}", component.id))?;
+                    {
+                        let state = app.state::<AppState>();
+                        let mut windows =
+                            state.windows().lock().unwrap_or_else(|e| e.into_inner());
+                        windows.insert(
+                            component.id.clone(),
+                            WindowEntry {
+                                title: component.window.title.clone(),
+                                component: component.id.clone(),
+                            },
+                        );
+                    }
                 }
-                let layout = setup_core
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .config()
-                    .window_layout(&component.id)
-                    .cloned();
-                window_service
-                    .create_window(&component.id, &component.window, layout.as_ref())
-                    .map_err(|e| anyhow::anyhow!("创建组件窗口 {} 失败：{e}", component.id))?;
-                {
-                    let state = app.state::<AppState>();
-                    let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
-                    windows.insert(
-                        component.id.clone(),
-                        pano_ui::state::WindowEntry {
-                            title: component.window.title.clone(),
-                            series: component.series.clone(),
-                        },
-                    );
+                // 写回窗口集合（[ui].windows + [window.<id>] 组件绑定）
+                save_config().map_err(|e| anyhow::anyhow!("首次播种写回窗口集合失败：{e}"))?;
+            } else {
+                // 持久化集合恢复：逐 id 建窗（组件须仍在目录中，否则跳过 + warn）
+                for id in &persisted_ids {
+                    let (component, title) = {
+                        let lc = setup_core.lock().unwrap_or_else(|e| e.into_inner());
+                        let cfg = lc.config().window_config(id).cloned();
+                        (
+                            cfg.as_ref().and_then(|c| c.component.clone()),
+                            cfg.as_ref().and_then(|c| c.title.clone()),
+                        )
+                    };
+                    let Some(component) = component else {
+                        tracing::warn!(target: "pano::app", window = %id, "持久化窗口缺组件绑定，跳过");
+                        continue;
+                    };
+                    let Some(comp) = ui_spec.components.iter().find(|c| c.id == component) else {
+                        tracing::warn!(target: "pano::app", window = %id, component = %component,
+                            "持久化窗口绑定的组件不在组件目录，跳过");
+                        continue;
+                    };
+                    // 未注册（feature 未编译）的组件不建窗：与命令层 / 列表置灰语义一致
+                    let available = {
+                        let lc = setup_core.lock().unwrap_or_else(|e| e.into_inner());
+                        pano_ui::commands::component_available(comp, |aid| {
+                            lc.adapter_meta(aid).is_some()
+                        })
+                    };
+                    if !available {
+                        tracing::warn!(target: "pano::app", window = %id, component = %component,
+                            "持久化窗口绑定的组件适配器未注册（feature 关闭？），跳过");
+                        continue;
+                    }
+                    let layout = setup_core
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .config()
+                        .window_layout(id)
+                        .cloned();
+                    let title = title.unwrap_or_else(|| comp.window.title.clone());
+                    let spec = pano_core::capability::WindowSpec {
+                        title: title.clone(),
+                        ..comp.window.clone()
+                    };
+                    window_service
+                        .create_window(id, &spec, layout.as_ref())
+                        .map_err(|e| anyhow::anyhow!("恢复监控窗口 {id} 失败：{e}"))?;
+                    {
+                        let state = app.state::<AppState>();
+                        let mut windows =
+                            state.windows().lock().unwrap_or_else(|e| e.into_inner());
+                        windows.insert(id.clone(), WindowEntry { title, component });
+                    }
                 }
             }
 
@@ -285,24 +358,61 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// 配置持久化回调：段级合并窗口布局 → 序列化 → 写回文件（与热重载串行，架构 §13）。
+/// 配置持久化回调：段级合并窗口集合（注册表：组件绑定 + 标题）与布局 → 序列化 → 写回文件。
+///
+/// 与热重载写文件串行协调（架构 §13）；运行时窗口增删 / 切换组件后由命令层
+/// 经此写回 `[ui].windows` 与 `[window.<id>]` 段（M2.2 窗口集合持久化）。
 fn build_save_config(
     core: &Arc<Mutex<Lifecycle>>,
     config_path: &std::path::Path,
     layouts: &Arc<Mutex<HashMap<String, WindowLayout>>>,
+    windows: &Arc<Mutex<HashMap<String, WindowEntry>>>,
 ) -> SaveConfigFn {
     let core = Arc::clone(core);
     let layouts = Arc::clone(layouts);
+    let windows = Arc::clone(windows);
     let path = config_path.to_path_buf();
     Arc::new(move || -> Result<(), String> {
         let mut lc = core.lock().map_err(|e| e.to_string())?;
-        let snapshot = {
+        let layouts_snapshot = {
             let guard = layouts.lock().map_err(|e| e.to_string())?;
             guard.clone()
         };
-        for (id, layout) in snapshot {
-            lc.config_mut().set_window_layout(&id, Some(layout));
+        let windows_snapshot = {
+            let guard = windows.lock().map_err(|e| e.to_string())?;
+            guard.clone()
+        };
+        // 窗口段以运行时注册表为权威：组件绑定 + 标题 + 布局
+        for (id, entry) in &windows_snapshot {
+            let layout = layouts_snapshot.get(id).cloned().unwrap_or_default();
+            lc.config_mut().set_window_config(
+                id,
+                Some(WindowConfig {
+                    component: (!entry.component.is_empty()).then(|| entry.component.clone()),
+                    title: Some(entry.title.clone()),
+                    layout,
+                }),
+            );
         }
+        // 清理配置中已不存在的窗口段（已销毁窗口的死配置，防脏数据残留）
+        let stale_ids: Vec<String> = lc
+            .config()
+            .windows
+            .keys()
+            .filter(|id| !windows_snapshot.contains_key(*id))
+            .cloned()
+            .collect();
+        for id in stale_ids {
+            lc.config_mut().set_window_config(&id, None);
+        }
+        // [ui].windows = 监控窗口 id 列表（不含固定管理窗口）
+        let mut ids: Vec<String> = windows_snapshot
+            .keys()
+            .filter(|k| k.as_str() != "manager")
+            .cloned()
+            .collect();
+        ids.sort();
+        lc.config_mut().set_ui_windows(ids);
         let text = lc.config().to_toml().map_err(|e| e.to_string())?;
         std::fs::write(&path, text).map_err(|e| format!("写回配置失败：{e}"))
     })

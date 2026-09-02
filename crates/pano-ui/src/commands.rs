@@ -6,11 +6,15 @@
 //! - 配置修改流程：core 热生效（失败回滚）→ 成功才经 `save_config` 写回 pano.toml。
 
 use pano_core::adapter::{AdapterId, SeriesId};
+use pano_core::capability::{ComponentSpec, UISpec, is_valid_component_id};
 use pano_core::config::{AdapterConfig, SCHEMA_VERSION};
 use tauri::State;
 
-use crate::dto::{AdapterInfo, FieldInfo, MonitorDto, SampleEventDto, StatusDto, WindowInfoDto};
-use crate::state::AppState;
+use crate::dto::{
+    AdapterInfo, ComponentInfo, FieldInfo, MonitorDto, SampleEventDto, StatusDto, WindowContentDto,
+    WindowInfoDto,
+};
+use crate::state::{AppState, WindowEntry};
 
 /// 适配器列表（管理页表格，schema 驱动表单渲染）。
 #[tauri::command]
@@ -81,29 +85,43 @@ pub async fn restart_adapter(state: State<'_, AppState>, id: String) -> Result<(
     lc.start(&adapter_id).map_err(|e| e.to_string())
 }
 
-/// 某组件消费的 series 列表（前端组件窗口按窗口 label 查询，ui.md §4）。
+/// UI 组件目录（「窗口管理」页选组件用，ui.md §3.2）。
 ///
-/// 优先读运行时窗口注册表（含「窗口管理」动态创建/切换的窗口）；
-/// 注册表无此窗口时回退到 `UISpec.components`（启动播种即入注册表，此处
-/// 回退仅兜底早期版本）。
+/// 返回全部组件并附 `available`：全部 series 所属适配器已注册为可用；
+/// 未注册（feature 未编译）的组件前端置灰不可选。
 #[tauri::command]
-pub fn component_series(state: State<'_, AppState>, id: String) -> Result<Vec<String>, String> {
-    let windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(entry) = windows.get(&id) {
-        return Ok(entry
-            .series
-            .iter()
-            .map(|s| s.as_str().to_string())
-            .collect());
-    }
-    drop(windows);
+pub fn list_components(state: State<'_, AppState>) -> Vec<ComponentInfo> {
+    let lc = state.lifecycle();
     state
         .ui_spec
         .components
         .iter()
-        .find(|c| c.id == id)
-        .map(|c| c.series.iter().map(|s| s.as_str().to_string()).collect())
-        .ok_or_else(|| format!("未知窗口：{id}"))
+        .map(|c| {
+            let available = component_available(c, |aid| lc.adapter_meta(aid).is_some());
+            ComponentInfo {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                series: c.series.iter().map(|s| s.as_str().to_string()).collect(),
+                available,
+            }
+        })
+        .collect()
+}
+
+/// 某窗口当前内容（component + series；组件窗口前端按窗口 label 查询，ui.md §4）。
+///
+/// 窗口的 series 由绑定的组件类型在目录中解析（窗口不再直接存 series，M2.2）。
+#[tauri::command]
+pub fn window_content(state: State<'_, AppState>, id: String) -> Result<WindowContentDto, String> {
+    let windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
+    let entry = windows
+        .get(&id)
+        .ok_or_else(|| format!("窗口不存在：{id}"))?;
+    let series = component_series_of(&state.ui_spec, &entry.component);
+    Ok(WindowContentDto {
+        component: entry.component.clone(),
+        series: series.iter().map(|s| s.as_str().to_string()).collect(),
+    })
 }
 
 /// 某 series 最近至多 `window` 个样本（组件窗口首次渲染拉取）。
@@ -243,20 +261,19 @@ pub fn window_show(state: State<'_, AppState>, label: String) -> Result<(), Stri
 
 /// 窗口列表（「窗口管理」页 / 托盘「窗口列表」共用）。
 ///
-/// 返回运行时注册表中的全部窗口（含固定管理窗口），附可见状态。
+/// 返回运行时注册表中的全部窗口（含固定管理窗口），附可见状态与绑定的组件
+/// （series 由组件目录解析，供前端展示）。
 #[tauri::command]
 pub fn list_windows(state: State<'_, AppState>) -> Vec<WindowInfoDto> {
     let mut out: Vec<WindowInfoDto> = Vec::new();
     let windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
     for (id, entry) in windows.iter() {
+        let series = component_series_of(&state.ui_spec, &entry.component);
         out.push(WindowInfoDto {
             id: id.clone(),
             title: entry.title.clone(),
-            series: entry
-                .series
-                .iter()
-                .map(|s| s.as_str().to_string())
-                .collect(),
+            component: entry.component.clone(),
+            series: series.iter().map(|s| s.as_str().to_string()).collect(),
             is_manager: id == "manager",
             visible: state
                 .window_service
@@ -273,24 +290,23 @@ pub fn list_windows(state: State<'_, AppState>) -> Vec<WindowInfoDto> {
     out
 }
 
-/// 新建监控窗口（「分配适配器」：指定该窗口展示的 series）。
+/// 新建监控窗口并绑定一个 UI 组件（「分配组件」，ui.md §3.2）。
 ///
 /// 校验：id 满足全小写 ASCII 连字符、全局唯一（不与管理窗口冲突）；
-/// series 格式合法且各自所属适配器已注册。成功后将窗口加入运行时注册表
-/// 并触发托盘「窗口列表」重建。
+/// 组件在目录中存在且全部 series 所属适配器已注册（已注册但未启用的适配器
+/// 允许建窗，窗口显示空态）。标题缺省取组件默认标题，可经 `title` 覆盖。
+/// 成功后将窗口加入运行时注册表、持久化窗口集合并触发托盘「窗口列表」重建。
 ///
 /// **必须为 async 命令**：Windows 上在同步命令/事件处理器中创建 WebView
 /// 会死锁（Tauri 文档，[wry#583](https://github.com/tauri-apps/wry/issues/583)）。
-/// async 命令在 tokio 线程执行，`WebviewWindowBuilder::build()` 经
-/// `send_user_message` 排到主线程事件循环，脱离 WebView2 IPC 回调上下文后创建。
 #[tauri::command]
 pub async fn create_window(
     state: State<'_, AppState>,
     id: String,
-    title: String,
-    series: Vec<String>,
+    component: String,
+    title: Option<String>,
 ) -> Result<(), String> {
-    if !pano_core::capability::is_valid_component_id(&id) {
+    if !is_valid_component_id(&id) {
         return Err(format!(
             "窗口 id 格式非法（应为全小写 ASCII、连字符分隔）：{id}"
         ));
@@ -298,22 +314,18 @@ pub async fn create_window(
     if id == "manager" {
         return Err("manager 为保留窗口 id".into());
     }
-    let series_ids: Vec<SeriesId> = series.iter().map(|s| SeriesId::parse(s.as_str())).collect();
-    // 校验 series 合法且适配器已注册
-    {
+    let comp = {
         let lc = state.lifecycle();
-        for sid in &series_ids {
-            if !pano_core::capability::is_valid_series_id(sid) {
-                return Err(format!("series 格式非法：{sid}"));
-            }
-            if lc.adapter_meta(&sid.adapter_id()).is_none() {
-                return Err(format!("series 所属适配器未注册：{}", sid.adapter_id()));
-            }
-        }
-    }
+        validate_component_binding(&state.ui_spec, &component, |aid| {
+            lc.adapter_meta(aid).is_some()
+        })?
+    };
+    let title = title
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| comp.window.title.clone());
     let spec = pano_core::capability::WindowSpec {
-        title,
-        ..pano_core::capability::WindowSpec::default()
+        title: title.clone(),
+        ..comp.window.clone()
     };
     let layout = state
         .window_layouts()
@@ -326,65 +338,62 @@ pub async fn create_window(
         .create_window(&id, &spec, layout.as_ref())
         .map_err(|e| e.to_string())?;
     let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
-    windows.insert(
-        id.clone(),
-        crate::state::WindowEntry {
-            title: spec.title,
-            series: series_ids,
-        },
-    );
+    windows.insert(id.clone(), WindowEntry { title, component });
     drop(windows);
+    // 持久化窗口集合（[ui].windows + [window.<id>]）
+    (state.save_config)().map_err(|e| format!("窗口集合写回失败：{e}"))?;
     state.refresh_tray_now();
-    tracing::info!(target: "pano::ui", id, "新建监控窗口");
+    tracing::info!(target: "pano::ui", id, "新建监控窗口（绑定组件）");
     Ok(())
 }
 
-/// 切换窗口展示的 series（「切换适配器」：改该窗口消费的指标）。
+/// 切换窗口绑定的 UI 组件（「切换组件」，ui.md §3.2）。
 ///
-/// 同步更新运行时注册表，并向该窗口 emit 配置变更事件，前端据此重载。
+/// 仅换内容 / series（标题与几何不动），同步更新运行时注册表、持久化窗口集合，
+/// 并向该窗口 emit 内容变更事件，前端据此重载。
 #[tauri::command]
-pub async fn set_window_series<R: tauri::Runtime>(
+pub async fn set_window_component<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     id: String,
-    series: Vec<String>,
+    component: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let series_ids: Vec<SeriesId> = series.iter().map(|s| SeriesId::parse(s.as_str())).collect();
+    if id == "manager" {
+        return Err("管理窗口不支持切换组件".into());
+    }
     {
         let lc = state.lifecycle();
-        for sid in &series_ids {
-            if !pano_core::capability::is_valid_series_id(sid) {
-                return Err(format!("series 格式非法：{sid}"));
-            }
-            if lc.adapter_meta(&sid.adapter_id()).is_none() {
-                return Err(format!("series 所属适配器未注册：{}", sid.adapter_id()));
-            }
-        }
+        validate_component_binding(&state.ui_spec, &component, |aid| {
+            lc.adapter_meta(aid).is_some()
+        })?;
     }
     let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
     let entry = windows
         .get_mut(&id)
         .ok_or_else(|| format!("窗口不存在：{id}"))?;
-    if id == "manager" {
-        return Err("管理窗口不支持切换 series".into());
-    }
-    entry.series = series_ids.clone();
+    entry.component = component.clone();
     drop(windows);
-    // 通知该窗口前端重载 series（若窗口正打开）
+    // 持久化窗口集合
+    (state.save_config)().map_err(|e| format!("窗口集合写回失败：{e}"))?;
+    // 通知该窗口前端重载内容（若窗口正打开）
+    let series = component_series_of(&state.ui_spec, &component);
     use tauri::Emitter;
-    let payload: Vec<String> = series_ids.iter().map(|s| s.as_str().to_string()).collect();
+    let payload = WindowContentDto {
+        component: component.clone(),
+        series: series.iter().map(|s| s.as_str().to_string()).collect(),
+    };
     let _ = app.emit_to(
         tauri::EventTarget::labeled(&id),
-        crate::bridge::EVENT_WINDOW_SERIES,
+        crate::bridge::EVENT_WINDOW_COMPONENT,
         payload,
     );
-    tracing::info!(target: "pano::ui", id, series = ?series, "切换窗口 series");
+    tracing::info!(target: "pano::ui", id, component = %component, "切换窗口组件");
     Ok(())
 }
 
 /// 销毁监控窗口（彻底关闭并从窗口管理器移除；管理窗口不可销毁）。
 ///
-/// 同步移除运行时注册表条目、窗口布局记忆，并触发托盘「窗口列表」重建。
+/// 同步移除运行时注册表条目、窗口布局记忆，持久化窗口集合并触发托盘「窗口列表」重建。
 #[tauri::command]
 pub fn destroy_window(state: State<'_, AppState>, id: String) -> Result<(), String> {
     if id == "manager" {
@@ -404,6 +413,8 @@ pub fn destroy_window(state: State<'_, AppState>, id: String) -> Result<(), Stri
         .window_service
         .destroy(&id)
         .map_err(|e| e.to_string())?;
+    // 持久化窗口集合（移除该窗口）
+    (state.save_config)().map_err(|e| format!("窗口集合写回失败：{e}"))?;
     state.refresh_tray_now();
     tracing::info!(target: "pano::ui", id, "销毁监控窗口");
     Ok(())
@@ -478,7 +489,8 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
         restart_adapter,
         series_history,
         series_latest,
-        component_series,
+        list_components,
+        window_content,
         window_set_fullscreen,
         window_set_always_on_top,
         window_set_monitor,
@@ -489,7 +501,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
         window_show,
         list_windows,
         create_window,
-        set_window_series,
+        set_window_component,
         destroy_window,
         monitors,
         config_preview,
@@ -497,9 +509,141 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
     ])
 }
 
+// ---------------------------------------------------------------------------
+// 组件目录辅助（纯函数，可单测；M2.2）
+
+/// 在组件目录中查找组件类型。
+pub fn find_component<'a>(spec: &'a UISpec, id: &str) -> Option<&'a ComponentSpec> {
+    spec.components.iter().find(|c| c.id == id)
+}
+
+/// 按组件类型 id 解析其固定 series（目录中不存在 → 空列表）。
+pub fn component_series_of(spec: &UISpec, component: &str) -> Vec<SeriesId> {
+    find_component(spec, component)
+        .map(|c| c.series.clone())
+        .unwrap_or_default()
+}
+
+/// 组件是否可用：全部 series 所属适配器已注册（feature 已编译）。
+///
+/// 注意：**已注册但未启用**的适配器仍视为可用（建窗后显示空态），
+/// 仅未注册（feature 未编译）的组件不可选（ui.md §3.2 / 架构 §7）。
+pub fn component_available(
+    comp: &ComponentSpec,
+    adapter_registered: impl Fn(&AdapterId) -> bool,
+) -> bool {
+    comp.series
+        .iter()
+        .all(|s| adapter_registered(&s.adapter_id()))
+}
+
+/// 校验组件绑定（新建 / 切换组件共用）：
+/// 组件在目录中存在 + 全部 series 所属适配器已注册。
+fn validate_component_binding<'a>(
+    spec: &'a UISpec,
+    component: &str,
+    adapter_registered: impl Fn(&AdapterId) -> bool,
+) -> Result<&'a ComponentSpec, String> {
+    let comp =
+        find_component(spec, component).ok_or_else(|| format!("未知 UI 组件：{component}"))?;
+    if !component_available(comp, adapter_registered) {
+        return Err(format!(
+            "组件 {component} 依赖的适配器未注册（feature 未编译？）"
+        ));
+    }
+    Ok(comp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pano_core::adapter::AdapterId;
+    use pano_core::capability::WindowSpec;
+
+    fn sample_spec() -> UISpec {
+        UISpec {
+            requires: vec![],
+            components: vec![
+                ComponentSpec {
+                    id: "sys-cpu".into(),
+                    name: "CPU".into(),
+                    series: vec![SeriesId::new(&AdapterId::new("sys.cpu"), "usage")],
+                    window: WindowSpec {
+                        title: "CPU".into(),
+                        ..WindowSpec::default()
+                    },
+                },
+                ComponentSpec {
+                    id: "sys-net".into(),
+                    name: "网络".into(),
+                    series: vec![
+                        SeriesId::new(&AdapterId::new("sys.net"), "recv_bps"),
+                        SeriesId::new(&AdapterId::new("sys.net"), "sent_bps"),
+                    ],
+                    window: WindowSpec::default(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn find_component_hits_and_misses() {
+        let spec = sample_spec();
+        assert_eq!(
+            find_component(&spec, "sys-cpu").map(|c| c.name.as_str()),
+            Some("CPU")
+        );
+        assert!(find_component(&spec, "ghost").is_none());
+    }
+
+    #[test]
+    fn component_series_of_resolves_from_catalog() {
+        let spec = sample_spec();
+        let series = component_series_of(&spec, "sys-net");
+        assert_eq!(series.len(), 2);
+        assert_eq!(series[0].as_str(), "sys.net.recv_bps");
+        // 未知组件 → 空
+        assert!(component_series_of(&spec, "ghost").is_empty());
+    }
+
+    #[test]
+    fn component_available_requires_all_adapters_registered() {
+        let spec = sample_spec();
+        let cpu = find_component(&spec, "sys-cpu").unwrap();
+        let net = find_component(&spec, "sys-net").unwrap();
+        // 全部注册
+        let all: std::collections::HashSet<&str> = ["sys.cpu", "sys.net"].into_iter().collect();
+        assert!(component_available(cpu, |a| all.contains(a.as_str())));
+        assert!(component_available(net, |a| all.contains(a.as_str())));
+        // 缺 sys.net → cpu 可用、net 不可用
+        let only_cpu: std::collections::HashSet<&str> = ["sys.cpu"].into_iter().collect();
+        assert!(component_available(cpu, |a| only_cpu.contains(a.as_str())));
+        assert!(!component_available(net, |a| only_cpu.contains(a.as_str())));
+    }
+
+    #[test]
+    fn validate_component_binding_rules() {
+        let spec = sample_spec();
+        let all: std::collections::HashSet<&str> = ["sys.cpu", "sys.net"].into_iter().collect();
+        let reg = |a: &AdapterId| all.contains(a.as_str());
+
+        // 未知组件
+        assert!(validate_component_binding(&spec, "ghost", reg).is_err());
+        // 依赖未注册
+        let only_cpu: std::collections::HashSet<&str> = ["sys.cpu"].into_iter().collect();
+        assert!(
+            validate_component_binding(&spec, "sys-net", |a| only_cpu.contains(a.as_str()))
+                .is_err()
+        );
+        // 合法绑定
+        assert!(validate_component_binding(&spec, "sys-cpu", reg).is_ok());
+        assert_eq!(
+            validate_component_binding(&spec, "sys-net", reg)
+                .map(|c| c.id.clone())
+                .unwrap(),
+            "sys-net"
+        );
+    }
 
     #[test]
     fn next_config_edits_existing() {
