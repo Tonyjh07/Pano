@@ -12,16 +12,65 @@ pub mod commands;
 pub mod dto;
 pub mod state;
 
-/// 本 UI 声明所需的能力与组件清单（架构 §7）。
+/// 本 UI 声明所需的能力与组件目录（架构 §7）。
 ///
-/// 能力校验由 `pano-app` 启动时执行；组件窗口按 `components` 逐个创建
-/// （仅当组件的 series 存在数据源，见架构 §7「建窗时机」）。
+/// `components` 即**组件目录**：每种「窗口内容形态」（组件类型）自带固定 series
+/// 与默认窗口规格；监控窗口为其实例（绑定 `component` id，series 由此解析）。
+/// 能力校验由 `pano-app` 启动时执行。
+///
+/// 默认目录基于 sys 适配器（默认 feature 可用）；示例适配器组件保留（默认
+/// feature 未编译其适配器时，`list_components` 标记不可用、置灰不可选）。
 pub fn uispec() -> UISpec {
     UISpec {
         requires: vec![Capability::new(Capability::TIME_SERIES)],
         components: vec![
             ComponentSpec {
+                id: "sys-cpu".into(),
+                name: "CPU 使用率".into(),
+                series: vec![SeriesId::new(&AdapterId::new("sys.cpu"), "usage")],
+                window: WindowSpec {
+                    title: "CPU 使用率".into(),
+                    size: (520.0, 360.0),
+                    ..WindowSpec::default()
+                },
+            },
+            ComponentSpec {
+                id: "sys-mem".into(),
+                name: "内存使用率".into(),
+                series: vec![SeriesId::new(&AdapterId::new("sys.mem"), "used_percent")],
+                window: WindowSpec {
+                    title: "内存使用率".into(),
+                    size: (520.0, 360.0),
+                    ..WindowSpec::default()
+                },
+            },
+            ComponentSpec {
+                id: "sys-disk".into(),
+                name: "磁盘使用率".into(),
+                series: vec![SeriesId::new(&AdapterId::new("sys.disk"), "used_percent")],
+                window: WindowSpec {
+                    title: "磁盘使用率".into(),
+                    size: (520.0, 360.0),
+                    ..WindowSpec::default()
+                },
+            },
+            ComponentSpec {
+                id: "sys-net".into(),
+                name: "网络速率".into(),
+                series: vec![
+                    SeriesId::new(&AdapterId::new("sys.net"), "recv_bps"),
+                    SeriesId::new(&AdapterId::new("sys.net"), "sent_bps"),
+                ],
+                window: WindowSpec {
+                    title: "网络速率".into(),
+                    size: (640.0, 400.0),
+                    ..WindowSpec::default()
+                },
+            },
+            // 示例适配器组件（默认 feature 下适配器未注册 → 目录中置灰不可选）
+            ComponentSpec {
                 id: "counter-chart".into(),
+                name: "示例计数器".into(),
                 series: vec![SeriesId::new(&AdapterId::new("example.counter"), "value")],
                 window: WindowSpec {
                     title: "示例计数器".into(),
@@ -31,6 +80,7 @@ pub fn uispec() -> UISpec {
             },
             ComponentSpec {
                 id: "sine-chart".into(),
+                name: "正弦曲线".into(),
                 series: vec![SeriesId::new(&AdapterId::new("example.sine"), "value")],
                 window: WindowSpec {
                     title: "正弦曲线".into(),

@@ -84,6 +84,7 @@ impl UISpec {
 
     /// 校验声明：
     /// - 组件 id 满足全小写 ASCII、连字符分隔且全局唯一；
+    /// - 组件显示名非空；
     /// - 组件消费的 series 格式合法（适配器 id 前缀 + 非空指标名）。
     pub fn validate(&self) -> Result<(), CoreError> {
         let mut seen = std::collections::HashSet::new();
@@ -96,6 +97,12 @@ impl UISpec {
             }
             if !seen.insert(comp.id.clone()) {
                 return Err(CoreError::Config(format!("组件 id 重复：{}", comp.id)));
+            }
+            if comp.name.trim().is_empty() {
+                return Err(CoreError::Config(format!(
+                    "组件 {} 的显示名不能为空",
+                    comp.id
+                )));
             }
             for series in &comp.series {
                 if !is_valid_series_id(series) {
@@ -111,13 +118,19 @@ impl UISpec {
 }
 
 /// 单个监控组件的声明：内容消费的指标 + 窗口需求（架构 §7，R1）。
+///
+/// M2.2：`UISpec.components` 即**组件目录**，每个 `ComponentSpec` 描述一种
+/// 「窗口内容形态」（组件类型）；监控窗口为其实例，绑定 `component`（组件 id），
+/// series 由本声明解析（窗口不再直接存 series）。
 #[derive(Debug, Clone)]
 pub struct ComponentSpec {
-    /// 组件 id：全小写 ASCII、连字符分隔，全局唯一（如 `counter-chart`）。
+    /// 组件类型 id：全小写 ASCII、连字符分隔，全局唯一（如 `sys-cpu`）。
     pub id: String,
-    /// 本组件消费的指标序列。
+    /// 组件显示名（如 "CPU 使用率"）。
+    pub name: String,
+    /// 本组件固定消费的指标序列。
     pub series: Vec<SeriesId>,
-    /// 窗口需求声明（纯数据）。
+    /// 默认窗口需求声明（纯数据；新建 / 播种窗口的默认规格）。
     pub window: WindowSpec,
 }
 
@@ -227,6 +240,7 @@ mod tests {
             requires: vec![Capability::new(Capability::TIME_SERIES)],
             components: vec![ComponentSpec {
                 id: "counter-chart".into(),
+                name: "计数器".into(),
                 series: vec![SeriesId::new(&AdapterId::new("example.counter"), "value")],
                 window: WindowSpec {
                     title: "计数器".into(),
@@ -270,10 +284,23 @@ mod tests {
             requires: vec![],
             components: vec![ComponentSpec {
                 id: "chart-a".into(),
+                name: "图表".into(),
                 series: vec![SeriesId::new(&AdapterId::new("example.counter"), "")],
                 window: WindowSpec::default(),
             }],
         };
         assert!(bad.validate().is_err());
+
+        // 显示名为空必须被拒
+        let no_name = UISpec {
+            requires: vec![],
+            components: vec![ComponentSpec {
+                id: "chart-b".into(),
+                name: "  ".into(),
+                series: vec![SeriesId::new(&AdapterId::new("example.counter"), "value")],
+                window: WindowSpec::default(),
+            }],
+        };
+        assert!(no_name.validate().is_err());
     }
 }
