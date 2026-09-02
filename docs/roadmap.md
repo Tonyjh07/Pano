@@ -132,10 +132,30 @@
 **实现说明 / 遗留**：
 
 - **前端单测缺口延续**：命令层校验逻辑抽纯函数并补 Rust 单测；前端 `renderers` 渲染器分派暂以 Vitest 覆盖纯函数，组件渲染级单测（Svelte 组件测试方案）此前已弃用（见 M2.1 记录）；
-- **M2.3 示例 UI 组件**：新增一个组件目录项 + 专用 Svelte 渲染器 + `renderers.ts` 映射，验证「换组件 = 换渲染」的可替换性（用户将在 M2.3 提出具体要求）；
+- **M2.3 汽车仪表盘组件**：见下文「M2.3 —— 汽车仪表盘式资源监控」；
 - **配置升级**：M2.1 既有 `[window.<id>]` 布局段在 M2.2 首次运行时因缺 `[ui].windows` 段会触发按目录播种并写回（旧布局段被覆盖为组件 + 布局）；已知边界，文档注明；
 - `component_series` 命令更名为 `window_content`（返回 component + series）；`pano://window-series` 事件更名为 `pano://window-component`；
 - 动态窗口「仅布局记忆、集合不持久化」的 M2.1 未定项已在本里程碑按用户选择定稿为「集合持久化」。
+
+## M2.3 —— 汽车仪表盘式资源监控（用户新需求）
+
+**设计**：专用 UI 组件 `sys-dashboard`（`renderers.ts` 注册专用 Svelte 渲染器），验证「换组件 = 换渲染」的可替换性。用户确认三项数据源决策。
+
+**数据源增强（sys 适配器）**：
+
+- `sys.disk.active_percent`（Number，%）：**磁盘活动率**（近似「磁盘忙碌时间」）。以 sysinfo `DiskUsage.read_bytes + written_bytes`（自上次刷新的增量）判定该采样点是否有读写 IO；滑动窗口取最近 10 个采样点中活跃比例 × 100（活动率纯函数可单测）；
+- `sys.net.utilization`（Number，%）：**链路利用率** =（recv_bps + sent_bps）/（参考带宽）× 100，钳制 0..=100；参考带宽 `link_mbps` 可配（Number，默认 1000 = 1 Gbps；`1 Mbps = 125_000 B/s`）；
+- 四个 sys 适配器各增配置字段 `high_threshold`（Number，默认 80，合法域 0..=100）：**高占用阈值**（仪表盘指示灯判定用；适配器自身不使用该值，仅作为数据源配置暴露）。前端经 `list_adapters` 返回的 `config`（当前自定义配置值）读取，未配置回落默认 80。
+
+**组件目录**：`sys-dashboard`（name「资源仪表盘」），固定 series = `sys.cpu.usage` + `sys.mem.used_percent` + `sys.disk.active_percent` + `sys.net.utilization`；默认窗口标题「资源仪表盘」、尺寸 860×540。
+
+**专用渲染器 `SysDashboard.svelte`**（`renderers.ts` 注册 `sys-dashboard`）：
+
+- 汽车仪表盘式布局：左右两个**大仪表**（CPU、内存占用率），下方两个**小仪表**（磁盘活动率、网络利用率）；SVG 半圆弧刻度 0-100 + 指针 + 红区（阈值→100）；
+- 每个仪表下方一个**指示灯**：该指标占用率超其适配器 `high_threshold`（缺省 80）→ 亮红，否则绿色；
+- 数据取自通用窗口管道（ComponentWindow 传 seriesList / samples / latest），仪表显示 `latest` 瞬时值；`Gauge.svelte` 为可复用 SVG 半圆仪表（参数化大小 / 阈值 / 红区）。
+
+**验收**：`cargo tauri dev` 后在「窗口管理」新建窗口绑定「资源仪表盘」（或删除 pano.toml 中的 `[ui]` / `[window.<id>]` 段——段缺失 = 首次运行，触发按目录播种并写回）；四个仪表实时反映占用，任一指标超阈值其指示灯变红。
 
 ## M3 —— 增强与打磨
 
