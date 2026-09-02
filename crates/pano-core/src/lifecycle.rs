@@ -379,6 +379,7 @@ mod tests {
             core: Default::default(),
             adapters,
             windows: HashMap::new(),
+            ui: None,
         }
     }
 
@@ -528,11 +529,13 @@ mod tests {
             components: vec![
                 ComponentSpec {
                     id: "chart-a".into(),
+                    name: "图表A".into(),
                     series: vec![SeriesId::new(&AdapterId::new("example.fake"), "value")],
                     window: WindowSpec::default(),
                 },
                 ComponentSpec {
                     id: "chart-a".into(),
+                    name: "图表A".into(),
                     series: vec![SeriesId::new(&AdapterId::new("example.fake"), "value")],
                     window: WindowSpec::default(),
                 },
@@ -545,6 +548,7 @@ mod tests {
             requires: vec![],
             components: vec![ComponentSpec {
                 id: "Bad_Id".into(),
+                name: "图表".into(),
                 series: vec![],
                 window: WindowSpec::default(),
             }],
@@ -556,6 +560,7 @@ mod tests {
             requires: vec![],
             components: vec![ComponentSpec {
                 id: "chart-b".into(),
+                name: "图表B".into(),
                 series: vec![SeriesId::new(&AdapterId::new("example.fake"), "value")],
                 window: WindowSpec {
                     title: "测试".into(),

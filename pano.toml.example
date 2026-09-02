@@ -56,9 +56,24 @@ sampling = 1000
 # sampling = 1000                          # 推送节流周期（高频消息按此合并）
 # url = "ws://127.0.0.1:9001/stream"       # 必填：WebSocket 端点，推送 JSON 文本，取 `value` 字段
 
-# 窗口布局持久化（由窗口服务读写，见架构 §13）；每窗口一段，id 与组件 id 一致
-# position / size 为逻辑像素；monitor 为显示器序列化标识（如 "primary" / 自定义编号）
-# [window."dashboard"]
+# --- 窗口集合与布局持久化（M2.2，架构 §13）---
+# [ui].windows = 监控窗口 id 列表（**段缺失** = 首次运行，启动按组件目录播种并写回；
+# **段存在但列表为空** = 已销毁全部监控窗口，保持为空）。
+# [window.<id>] 段：component = 绑定的组件类型 id（组件目录之一），title = 窗口标题覆盖
+# （缺省用组件默认标题），其余为布局字段（position / size 为逻辑像素；
+# monitor 为显示器序列化标识，如 "primary" / 自定义编号）。管理窗口无 component。
+#
+# [ui]
+# windows = ["sys-cpu", "cpu-monitor"]
+#
+# [window."sys-cpu"]
+# component = "sys-cpu"
+# title = "CPU 使用率"
 # position = [120.0, 80.0]
-# size = [1000.0, 640.0]
+# size = [520.0, 360.0]
 # monitor = "primary"
+#
+# [window."cpu-monitor"]
+# component = "sys-cpu"        # 多窗口可绑定同一组件
+# title = "客厅大屏 CPU"
+# size = [800.0, 600.0]

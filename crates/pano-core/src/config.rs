@@ -29,15 +29,42 @@ pub struct PanoConfig {
     pub core: CoreConfig,
     #[serde(default)]
     pub adapters: HashMap<String, AdapterConfig>,
-    /// 窗口布局持久化（`[window.<id>]` 段，架构 §13）。
+    /// 窗口持久化（`[window.<id>]` 段：组件绑定 + 标题 + 布局，架构 §13 / roadmap M2.2）。
     #[serde(default, rename = "window")]
-    pub windows: HashMap<String, WindowLayout>,
+    pub windows: HashMap<String, WindowConfig>,
+    /// UI 段（`[ui]`）：持久化监控窗口 id 列表。
+    ///
+    /// `None`（段缺失）= 首次运行，启动时按组件目录播种并写回；
+    /// `Some`（段存在，列表可能为空）= 用户已显式维护窗口集合（含全部销毁），不重播种。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<UiSection>,
 }
 
-/// 单个窗口的布局持久化段（`[window.<id>]`）。
+/// `[ui]` 段（M2.2）：持久化监控窗口集合。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UiSection {
+    /// 监控窗口 id 列表（集合的权威来源；不含固定管理窗口）。
+    #[serde(default)]
+    pub windows: Vec<String>,
+}
+
+/// 单个窗口的持久化段（`[window.<id>]`，架构 §13 / roadmap M2.2）。
 ///
 /// `monitor` 为字符串序列化形式（如 `"primary"` / 自定义编号），
 /// 与 [`crate::capability::WindowSpec`] 的 `monitor` 字段一致。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WindowConfig {
+    /// 监控窗口绑定的组件类型 id（管理窗口 / 纯布局段无此字段）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    /// 窗口标题（覆盖组件默认标题；切换组件不改变标题）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(flatten)]
+    pub layout: WindowLayout,
+}
+
+/// 窗口布局（`[window.<id>]` 的布局部分）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WindowLayout {
     /// 窗口位置（逻辑像素）；缺省 = 居中。
@@ -142,11 +169,27 @@ impl PanoConfig {
                 )));
             }
         }
-        for id in self.windows.keys() {
+        for (id, cfg) in &self.windows {
             if !is_valid_component_id(id) {
                 return Err(CoreError::Config(format!(
                     "[window.<id>] 的窗口 id 格式非法（应为全小写 ASCII、连字符分隔）：{id}"
                 )));
+            }
+            if let Some(component) = &cfg.component
+                && !is_valid_component_id(component)
+            {
+                return Err(CoreError::Config(format!(
+                    "[window.{id}] 的 component 格式非法（应为全小写 ASCII、连字符分隔）：{component}"
+                )));
+            }
+        }
+        if let Some(ui) = &self.ui {
+            for id in &ui.windows {
+                if !is_valid_component_id(id) {
+                    return Err(CoreError::Config(format!(
+                        "[ui].windows 的窗口 id 格式非法（应为全小写 ASCII、连字符分隔）：{id}"
+                    )));
+                }
             }
         }
         Ok(())
@@ -181,21 +224,62 @@ impl PanoConfig {
         Ok(out)
     }
 
-    /// 读取某窗口的持久化布局（无记录返回 `None`）。
-    pub fn window_layout(&self, id: &str) -> Option<&WindowLayout> {
+    /// 读取某窗口的持久化配置（组件 + 标题 + 布局；无记录返回 `None`）。
+    pub fn window_config(&self, id: &str) -> Option<&WindowConfig> {
         self.windows.get(id)
     }
 
-    /// 写入（或移除）某窗口的持久化布局。
-    pub fn set_window_layout(&mut self, id: &str, layout: Option<WindowLayout>) {
-        match layout {
-            Some(l) => {
-                self.windows.insert(id.to_string(), l);
+    /// 读取某窗口的持久化布局（无记录返回 `None`）。
+    pub fn window_layout(&self, id: &str) -> Option<&WindowLayout> {
+        self.windows.get(id).map(|w| &w.layout)
+    }
+
+    /// 某窗口绑定的组件类型 id（管理窗口 / 纯布局段返回 `None`）。
+    pub fn window_component(&self, id: &str) -> Option<&str> {
+        self.windows.get(id).and_then(|w| w.component.as_deref())
+    }
+
+    /// 某窗口持久化的标题覆盖（无记录返回 `None`）。
+    pub fn window_title(&self, id: &str) -> Option<&str> {
+        self.windows.get(id).and_then(|w| w.title.as_deref())
+    }
+
+    /// 写入（或移除）某窗口的持久化配置段。
+    pub fn set_window_config(&mut self, id: &str, config: Option<WindowConfig>) {
+        match config {
+            Some(c) => {
+                self.windows.insert(id.to_string(), c);
             }
             None => {
                 self.windows.remove(id);
             }
         }
+    }
+
+    /// 合并写入（或移除）某窗口的持久化布局（保留既有 component / title）。
+    ///
+    /// `None` 表示移除整段（含组件绑定）；移除布局但保留组件请改用
+    /// [`Self::set_window_config`]。
+    pub fn set_window_layout(&mut self, id: &str, layout: Option<WindowLayout>) {
+        match layout {
+            Some(l) => {
+                let entry = self.windows.entry(id.to_string()).or_default();
+                entry.layout = l;
+            }
+            None => {
+                self.windows.remove(id);
+            }
+        }
+    }
+
+    /// 持久化的监控窗口 id 列表（`[ui].windows`；`None` = 段缺失，首次运行）。
+    pub fn ui_windows(&self) -> Option<&[String]> {
+        self.ui.as_ref().map(|u| u.windows.as_slice())
+    }
+
+    /// 写入监控窗口 id 列表（`[ui].windows` 段）。
+    pub fn set_ui_windows(&mut self, windows: Vec<String>) {
+        self.ui = Some(UiSection { windows });
     }
 }
 
@@ -361,6 +445,111 @@ enabled = true
 schema_version = 1
 [window."Bad.Id"]
 position = [1.0, 2.0]
+"#;
+        let err = PanoConfig::parse(text).unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)));
+    }
+
+    #[test]
+    fn window_config_component_title_roundtrip() {
+        let text = r#"
+schema_version = 1
+[ui]
+windows = ["sys-cpu", "mem-panel"]
+
+[window."sys-cpu"]
+component = "sys-cpu"
+title = "我的 CPU"
+
+[window."mem-panel"]
+component = "sys-mem"
+"#;
+        let config = PanoConfig::parse(text).expect("解析成功");
+        // [ui].windows
+        assert_eq!(
+            config.ui_windows(),
+            Some(&["sys-cpu".to_string(), "mem-panel".to_string()][..])
+        );
+        // [window."sys-cpu"]：component + title + 无布局
+        let w = config.window_config("sys-cpu").expect("有配置");
+        assert_eq!(w.component.as_deref(), Some("sys-cpu"));
+        assert_eq!(w.title.as_deref(), Some("我的 CPU"));
+        assert_eq!(w.layout.position, None);
+        // [window."mem-panel"]：component 无 title
+        assert_eq!(config.window_component("mem-panel"), Some("sys-mem"));
+        assert_eq!(config.window_title("mem-panel"), None);
+
+        // 写回 → 重新解析一致
+        let out = config.to_toml().unwrap();
+        let reparsed = PanoConfig::parse(&out).unwrap();
+        assert_eq!(
+            reparsed.ui_windows(),
+            Some(&["sys-cpu".to_string(), "mem-panel".to_string()][..])
+        );
+        assert_eq!(reparsed.window_component("sys-cpu"), Some("sys-cpu"));
+        assert_eq!(reparsed.window_title("sys-cpu"), Some("我的 CPU"));
+    }
+
+    #[test]
+    fn ui_section_absent_vs_empty_distinguished() {
+        // 无 [ui] 段 → ui_windows() 为 None（首次运行标志）
+        let no_ui = PanoConfig::parse("schema_version = 1\n").unwrap();
+        assert!(no_ui.ui_windows().is_none(), "段缺失 = 首次运行");
+
+        // [ui] 段存在但列表为空 → Some([])（用户删光窗口，不重播种）
+        let empty = PanoConfig::parse("schema_version = 1\n[ui]\n").unwrap();
+        assert_eq!(empty.ui_windows(), Some(&[][..]));
+    }
+
+    #[test]
+    fn set_window_config_and_merge_layout_preserves_component() {
+        let mut config = PanoConfig::parse("schema_version = 1\n").unwrap();
+        config.set_window_config(
+            "win-a",
+            Some(WindowConfig {
+                component: Some("sys-cpu".into()),
+                title: Some("CPU".into()),
+                layout: WindowLayout::default(),
+            }),
+        );
+        assert_eq!(config.window_component("win-a"), Some("sys-cpu"));
+
+        // 合并布局保留 component / title
+        config.set_window_layout(
+            "win-a",
+            Some(WindowLayout {
+                position: Some((1.0, 2.0)),
+                size: None,
+                monitor: None,
+            }),
+        );
+        let w = config.window_config("win-a").unwrap();
+        assert_eq!(w.component.as_deref(), Some("sys-cpu"));
+        assert_eq!(w.title.as_deref(), Some("CPU"));
+        assert_eq!(w.layout.position, Some((1.0, 2.0)));
+
+        // 移除整段
+        config.set_window_config("win-a", None);
+        assert!(config.window_config("win-a").is_none());
+    }
+
+    #[test]
+    fn reject_invalid_window_component_id() {
+        let text = r#"
+schema_version = 1
+[window."sys-cpu"]
+component = "Bad.Id"
+"#;
+        let err = PanoConfig::parse(text).unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)));
+    }
+
+    #[test]
+    fn reject_invalid_ui_window_id() {
+        let text = r#"
+schema_version = 1
+[ui]
+windows = ["sys-cpu", "Bad.Id"]
 "#;
         let err = PanoConfig::parse(text).unwrap_err();
         assert!(matches!(err, CoreError::Config(_)));
