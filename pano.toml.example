@@ -11,25 +11,36 @@ sampling_ms = 500
 # M2 起默认特性为系统监控适配器（spec §5），示例 / 远程适配器需显式启用对应 feature 并在此配置
 
 # --- 系统监控（默认 feature）---
+# 每个 sys 适配器可配 high_threshold（高占用阈值 %，默认 80，0..=100）：
+# 资源仪表盘（sys-dashboard）的指示灯据此判定（超阈值亮红）。
+
 [adapters."sys.cpu"]
 enabled = true
 sampling = 500
 # per_core = true   # 额外推送各核心使用率（sys.cpu.cores，JSON）
+# high_threshold = 80
 
 [adapters."sys.mem"]
 enabled = true
 sampling = 500
 # swap = true       # 额外推送交换分区使用率（sys.mem.swap_percent）
+# high_threshold = 80
 
 [adapters."sys.disk"]
 enabled = true
 sampling = 1000
 # device = "C:"     # 仅统计磁盘名 / 挂载点包含该子串的设备
+# high_threshold = 80
+# 注：磁盘适配器另推送 sys.disk.active_percent（磁盘活动率，近似忙碌时间，
+#     滑动窗口最近 10 个采样点中有读写 IO 的比例）
 
 [adapters."sys.net"]
 enabled = true
 sampling = 1000
 # interface = "eth" # 仅统计网卡名包含该子串的接口
+# link_mbps = 1000  # 参考链路带宽（Mbps，默认 1000 = 1 Gbps），用于折算
+#                   # sys.net.utilization（链路利用率 %）= 总速率 / 带宽 × 100
+# high_threshold = 80
 
 # --- 示例适配器（需 `--features adapter-example-*`）---
 # [adapters."example.counter"]

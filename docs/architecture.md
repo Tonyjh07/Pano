@@ -170,7 +170,13 @@ pub struct WindowSpec {
 - **切换组件 = 换内容**：对已开窗口 `set_window_component` 切换其组件类型（series 随之切换），命令层向该窗口 emit `pano://window-component` 事件，前端据此重载；窗口标题 / 几何不动；
 - **组件目录可用性**：`list_components` 返回全部组件并附 `available`（全部 series 所属适配器已注册）；适配器未注册（feature 未编译）的组件置灰不可选，已注册但未启用的组件可选但窗口显示空态；
 - **窗口集合持久化**（M2.2）：`[ui].windows` 段持久化监控窗口 id 列表。**段缺失**（`Option::None`）= 首次运行，按组件目录播种并写回；**段存在但列表为空** = 用户已销毁全部监控窗口，保持为空不重播种。`[window.<id>]` 段持久化 `component`（组件绑定）、`title`（窗口标题覆盖）与既有布局字段；运行时新建 / 切换 / 销毁窗口写回配置，重启恢复；
-- 换组件 = 换渲染形态：前端按组件类型 id 分派渲染器（`renderers.ts`）；M2.2 通用渲染 = 组件 series 逐个「数值卡 + 曲线」；M2.3 将实现一个**示例 UI 组件**（新增目录项 + 专用 Svelte 渲染器）验证可替换性。
+- 换组件 = 换渲染形态：前端按组件类型 id 分派渲染器（`renderers.ts`）；M2.2 通用渲染 = 组件 series 逐个「数值卡 + 曲线」；M2.3 实现专用渲染器 `SysDashboard.svelte`（注册 `sys-dashboard`，汽车仪表盘式）验证「换组件 = 换渲染」的可替换性。
+
+**数据源增强（M2.3）**：专用组件可能消费适配器新 series / 配置：
+
+- `sys.disk.active_percent`（磁盘活动率，近似忙碌时间）：以 sysinfo `DiskUsage.read_bytes + written_bytes`（自上次刷新增量）判定采样点是否有读写 IO，滑动窗口最近 10 点活跃比例 × 100；
+- `sys.net.utilization`（链路利用率）=（recv_bps + sent_bps）/（参考带宽）× 100（钳 0..=100），参考带宽 `link_mbps` 可配（默认 1000 Mbps）；
+- `high_threshold`（四个 sys 适配器通用配置，Number 默认 80，域 0..=100）：**高占用阈值**，供仪表盘指示灯判定。属「适配器自定义字段」：适配器自身不使用，仅作为数据源配置暴露；UI 经 `list_adapters` 返回的 `config`（当前自定义配置值）读取，未配置回落默认。
 
 - **管理窗口**（1 个）不属于 `components`：由 pano-app 固定创建（内含适配器管理页 + 设置页），是 pano-ui 内置的固定窗口；
 - **首次播种时机**：仅当组件的 `series` 存在数据源（对应适配器**已启用**）时才按目录播种组件窗口；无数据源组件不播种（在「窗口管理」页提示）。**用户新建窗口**可绑定已注册但未启用的组件（窗口内显示空态），仅对应适配器**未注册**（feature 未编译）的组件不可选；
