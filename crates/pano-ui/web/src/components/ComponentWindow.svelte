@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { api, type MonitorInfo, type SampleEvent } from "../lib/api";
   import { onSample } from "../lib/events";
@@ -15,40 +16,56 @@
   let latest = $state<Record<string, SampleEvent>>({});
   let error: string | null = $state(null);
   let unlisten: (() => void) | null = null;
+  let unlistenSeries: (() => void) | null = null;
 
   // 窗口控制状态
   let pinned = $state(false);
   let fullscreen = $state(false);
   let monitors: MonitorInfo[] = $state([]);
 
+  /** 载入本窗口的 series 并订阅样本（「窗口管理」切换 series 后重载）。 */
+  async function load(label: string) {
+    unlisten?.();
+    seriesList = await api.componentSeries(label);
+    samplesBySeries = {};
+    latest = {};
+    for (const s of seriesList) {
+      const hist = await api.seriesHistory(s, 300);
+      samplesBySeries[s] = hist;
+      if (hist.length > 0) latest[s] = hist[hist.length - 1];
+    }
+    // 事件订阅（ui.md §6）：按本组件 series 过滤；100ms 合并窗口
+    unlisten = await onSample(
+      (ev) => {
+        latest[ev.series] = ev;
+        const buf = samplesBySeries[ev.series] ?? [];
+        buf.push(ev);
+        if (buf.length > 500) buf.shift();
+        samplesBySeries[ev.series] = buf;
+      },
+      seriesList,
+      100,
+    );
+  }
+
   onMount(async () => {
     const label = getCurrentWindow().label;
     try {
-      seriesList = await api.componentSeries(label);
-      for (const s of seriesList) {
-        const hist = await api.seriesHistory(s, 300);
-        samplesBySeries[s] = hist;
-        if (hist.length > 0) latest[s] = hist[hist.length - 1];
-      }
-      // 事件订阅（ui.md §6）：按本组件 series 过滤；100ms 合并窗口
-      unlisten = await onSample(
-        (ev) => {
-          latest[ev.series] = ev;
-          const buf = samplesBySeries[ev.series] ?? [];
-          buf.push(ev);
-          if (buf.length > 500) buf.shift();
-          samplesBySeries[ev.series] = buf;
-        },
-        seriesList,
-        100,
-      );
+      // 「窗口管理」切换 series 事件：重载本窗口内容
+      unlistenSeries = await listen<string[]>("pano://window-series", () => {
+        void load(label).catch((e) => (error = String(e)));
+      });
+      await load(label);
       monitors = await api.monitors().catch(() => []);
     } catch (e) {
       error = String(e);
     }
   });
 
-  onDestroy(() => unlisten?.());
+  onDestroy(() => {
+    unlisten?.();
+    unlistenSeries?.();
+  });
 
   async function setPin(v: boolean) {
     pinned = v;

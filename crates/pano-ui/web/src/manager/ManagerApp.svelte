@@ -1,8 +1,9 @@
 <script lang="ts">
   import AdapterTable from "./adapters/AdapterTable.svelte";
+  import WindowManager from "./windows/WindowManager.svelte";
   import SettingsPage from "./settings/SettingsPage.svelte";
 
-  let tab: "adapters" | "settings" = "adapters";
+  let tab: "adapters" | "windows" | "settings" = "adapters";
   let toast: { kind: "ok" | "error"; text: string } | null = null;
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -26,6 +27,13 @@
       </button>
       <button
         class="tab"
+        class:active={tab === "windows"}
+        onclick={() => (tab = "windows")}
+      >
+        窗口
+      </button>
+      <button
+        class="tab"
         class:active={tab === "settings"}
         onclick={() => (tab = "settings")}
       >
@@ -36,6 +44,8 @@
   <main>
     {#if tab === "adapters"}
       <AdapterTable {notify} />
+    {:else if tab === "windows"}
+      <WindowManager {notify} />
     {:else}
       <SettingsPage />
     {/if}

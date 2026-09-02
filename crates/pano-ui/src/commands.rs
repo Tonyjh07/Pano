@@ -9,7 +9,7 @@ use pano_core::adapter::{AdapterId, SeriesId};
 use pano_core::config::{AdapterConfig, SCHEMA_VERSION};
 use tauri::State;
 
-use crate::dto::{AdapterInfo, FieldInfo, MonitorDto, SampleEventDto, StatusDto};
+use crate::dto::{AdapterInfo, FieldInfo, MonitorDto, SampleEventDto, StatusDto, WindowInfoDto};
 use crate::state::AppState;
 
 /// 适配器列表（管理页表格，schema 驱动表单渲染）。
@@ -20,6 +20,7 @@ pub fn list_adapters(state: State<'_, AppState>) -> Vec<AdapterInfo> {
     for id in lc.adapter_ids() {
         let meta = lc.adapter_meta(&id);
         let caps = lc.capabilities_of(&id).unwrap_or_default();
+        let series = lc.series_of(&id).unwrap_or_default();
         let schema = lc.config_schema_of(&id).unwrap_or_default();
         let status = lc.status_of(&id);
         let sampling = lc.config().sampling_ms_of(id.as_str());
@@ -32,6 +33,7 @@ pub fn list_adapters(state: State<'_, AppState>) -> Vec<AdapterInfo> {
                 .unwrap_or_default(),
             meta.as_ref().map(|m| m.version.clone()).unwrap_or_default(),
             caps.iter().map(|c| c.to_string()).collect(),
+            series.iter().map(|s| s.as_str().to_string()).collect(),
             &status,
             enabled,
             sampling,
@@ -80,15 +82,28 @@ pub async fn restart_adapter(state: State<'_, AppState>, id: String) -> Result<(
 }
 
 /// 某组件消费的 series 列表（前端组件窗口按窗口 label 查询，ui.md §4）。
+///
+/// 优先读运行时窗口注册表（含「窗口管理」动态创建/切换的窗口）；
+/// 注册表无此窗口时回退到 `UISpec.components`（启动播种即入注册表，此处
+/// 回退仅兜底早期版本）。
 #[tauri::command]
 pub fn component_series(state: State<'_, AppState>, id: String) -> Result<Vec<String>, String> {
+    let windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = windows.get(&id) {
+        return Ok(entry
+            .series
+            .iter()
+            .map(|s| s.as_str().to_string())
+            .collect());
+    }
+    drop(windows);
     state
         .ui_spec
         .components
         .iter()
         .find(|c| c.id == id)
         .map(|c| c.series.iter().map(|s| s.as_str().to_string()).collect())
-        .ok_or_else(|| format!("未知组件：{id}"))
+        .ok_or_else(|| format!("未知窗口：{id}"))
 }
 
 /// 某 series 最近至多 `window` 个样本（组件窗口首次渲染拉取）。
@@ -220,6 +235,180 @@ pub fn window_hide(state: State<'_, AppState>, label: String) -> Result<(), Stri
         .map_err(|e| e.to_string())
 }
 
+/// 窗口：显示并聚焦。
+#[tauri::command]
+pub fn window_show(state: State<'_, AppState>, label: String) -> Result<(), String> {
+    state.window_service.show(&label).map_err(|e| e.to_string())
+}
+
+/// 窗口列表（「窗口管理」页 / 托盘「窗口列表」共用）。
+///
+/// 返回运行时注册表中的全部窗口（含固定管理窗口），附可见状态。
+#[tauri::command]
+pub fn list_windows(state: State<'_, AppState>) -> Vec<WindowInfoDto> {
+    let mut out: Vec<WindowInfoDto> = Vec::new();
+    let windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
+    for (id, entry) in windows.iter() {
+        out.push(WindowInfoDto {
+            id: id.clone(),
+            title: entry.title.clone(),
+            series: entry
+                .series
+                .iter()
+                .map(|s| s.as_str().to_string())
+                .collect(),
+            is_manager: id == "manager",
+            visible: state
+                .window_service
+                .is_visible(id)
+                .unwrap_or_else(|_| state.window_service.exists(id)),
+        });
+    }
+    out.sort_by(|a, b| {
+        // 管理窗口置顶，其余按 id 排序
+        let am = a.is_manager as u8;
+        let bm = b.is_manager as u8;
+        bm.cmp(&am).then_with(|| a.id.cmp(&b.id))
+    });
+    out
+}
+
+/// 新建监控窗口（「分配适配器」：指定该窗口展示的 series）。
+///
+/// 校验：id 满足全小写 ASCII 连字符、全局唯一（不与管理窗口冲突）；
+/// series 格式合法且各自所属适配器已注册。成功后将窗口加入运行时注册表
+/// 并触发托盘「窗口列表」重建。
+///
+/// **必须为 async 命令**：Windows 上在同步命令/事件处理器中创建 WebView
+/// 会死锁（Tauri 文档，[wry#583](https://github.com/tauri-apps/wry/issues/583)）。
+/// async 命令在 tokio 线程执行，`WebviewWindowBuilder::build()` 经
+/// `send_user_message` 排到主线程事件循环，脱离 WebView2 IPC 回调上下文后创建。
+#[tauri::command]
+pub async fn create_window(
+    state: State<'_, AppState>,
+    id: String,
+    title: String,
+    series: Vec<String>,
+) -> Result<(), String> {
+    if !pano_core::capability::is_valid_component_id(&id) {
+        return Err(format!(
+            "窗口 id 格式非法（应为全小写 ASCII、连字符分隔）：{id}"
+        ));
+    }
+    if id == "manager" {
+        return Err("manager 为保留窗口 id".into());
+    }
+    let series_ids: Vec<SeriesId> = series.iter().map(|s| SeriesId::parse(s.as_str())).collect();
+    // 校验 series 合法且适配器已注册
+    {
+        let lc = state.lifecycle();
+        for sid in &series_ids {
+            if !pano_core::capability::is_valid_series_id(sid) {
+                return Err(format!("series 格式非法：{sid}"));
+            }
+            if lc.adapter_meta(&sid.adapter_id()).is_none() {
+                return Err(format!("series 所属适配器未注册：{}", sid.adapter_id()));
+            }
+        }
+    }
+    let spec = pano_core::capability::WindowSpec {
+        title,
+        ..pano_core::capability::WindowSpec::default()
+    };
+    let layout = state
+        .window_layouts()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .cloned();
+    state
+        .window_service
+        .create_window(&id, &spec, layout.as_ref())
+        .map_err(|e| e.to_string())?;
+    let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
+    windows.insert(
+        id.clone(),
+        crate::state::WindowEntry {
+            title: spec.title,
+            series: series_ids,
+        },
+    );
+    drop(windows);
+    state.refresh_tray_now();
+    tracing::info!(target: "pano::ui", id, "新建监控窗口");
+    Ok(())
+}
+
+/// 切换窗口展示的 series（「切换适配器」：改该窗口消费的指标）。
+///
+/// 同步更新运行时注册表，并向该窗口 emit 配置变更事件，前端据此重载。
+#[tauri::command]
+pub async fn set_window_series<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    id: String,
+    series: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let series_ids: Vec<SeriesId> = series.iter().map(|s| SeriesId::parse(s.as_str())).collect();
+    {
+        let lc = state.lifecycle();
+        for sid in &series_ids {
+            if !pano_core::capability::is_valid_series_id(sid) {
+                return Err(format!("series 格式非法：{sid}"));
+            }
+            if lc.adapter_meta(&sid.adapter_id()).is_none() {
+                return Err(format!("series 所属适配器未注册：{}", sid.adapter_id()));
+            }
+        }
+    }
+    let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
+    let entry = windows
+        .get_mut(&id)
+        .ok_or_else(|| format!("窗口不存在：{id}"))?;
+    if id == "manager" {
+        return Err("管理窗口不支持切换 series".into());
+    }
+    entry.series = series_ids.clone();
+    drop(windows);
+    // 通知该窗口前端重载 series（若窗口正打开）
+    use tauri::Emitter;
+    let payload: Vec<String> = series_ids.iter().map(|s| s.as_str().to_string()).collect();
+    let _ = app.emit_to(
+        tauri::EventTarget::labeled(&id),
+        crate::bridge::EVENT_WINDOW_SERIES,
+        payload,
+    );
+    tracing::info!(target: "pano::ui", id, series = ?series, "切换窗口 series");
+    Ok(())
+}
+
+/// 销毁监控窗口（彻底关闭并从窗口管理器移除；管理窗口不可销毁）。
+///
+/// 同步移除运行时注册表条目、窗口布局记忆，并触发托盘「窗口列表」重建。
+#[tauri::command]
+pub fn destroy_window(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    if id == "manager" {
+        return Err("管理窗口不可销毁".into());
+    }
+    let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
+    if windows.remove(&id).is_none() {
+        return Err(format!("窗口不存在：{id}"));
+    }
+    drop(windows);
+    state
+        .window_layouts()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
+    state
+        .window_service
+        .destroy(&id)
+        .map_err(|e| e.to_string())?;
+    state.refresh_tray_now();
+    tracing::info!(target: "pano::ui", id, "销毁监控窗口");
+    Ok(())
+}
+
 /// 枚举显示器（窗口控制菜单）。
 #[tauri::command]
 pub fn monitors(state: State<'_, AppState>) -> Result<Vec<MonitorDto>, String> {
@@ -297,6 +486,11 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
         window_set_size,
         window_focus,
         window_hide,
+        window_show,
+        list_windows,
+        create_window,
+        set_window_series,
+        destroy_window,
         monitors,
         config_preview,
         config_schema_version,

@@ -111,6 +111,13 @@
 - **回归测试**：`shutdown_task` 单测覆盖「运行时内调用 stop 不 panic 且任务被取消」（一致性测试走非运行时线程路径，无法覆盖运行时内分支，故补专门测试）；
 - 全局 `block_in_place` 仍未在任务内使用（遵守 §M2 教训）；本次修复在 `stop()` 内、用 `try_current` 区分上下文，不涉 time driver 关闭竞态。
 
+**实现说明 / 遗留（窗口管理「新建窗口」卡死，诊断记录）**：
+
+- **根因**：`create_window` 最初是**同步命令**，在 WebView2 `ipc://` 自定义协议回调（`WebResourceRequested` 事件，主线程事件循环内）里直接调用 `WebviewWindowBuilder::build()`。Windows 上创建 WebView2 控制器用 `wait_with_pump` 在当前线程跑**嵌套消息循环**等待完成回调，而当前线程正被同步命令占用（WebView2 单线程模型禁止在自身回调内同步创建新 WebView）→ 嵌套泵永远等不到回调 → 整个后端卡死。Tauri 文档明确警告 [wry#583](https://github.com/tauri-apps/wry/issues/583)：「On Windows, this function deadlocks when used in a synchronous command or event handlers; You should use `async` commands and separate threads when creating webviews」；
+- **修复**：`create_window` 改为 **async 命令**。async 命令经 `respond_async_serialized` 在 tokio 线程执行；`build()` 在非主线程调用时 `send_user_message` 走 `proxy.send_event`（非阻塞排入主线程事件队列）并立即返回 `DetachedWindow`，真正建窗在主线程事件循环里执行（脱离 WebView2 IPC 回调上下文）——与 Tauri 官方 `create_webview_window` async 命令行为一致；
+- **托盘重建线程**：`refresh_tray_now()` 在 async 命令（tokio 线程）里调用 → `TrayIcon::set_menu` 的 `run_item_main_thread` 阻塞等待主线程执行菜单任务；主线程空闲时会处理，不构成死锁（仅短暂占用 tokio worker）。`destroy_window`（同步命令，主线程内）调 `refresh_tray_now` 时 `send_user_message` 检测到主线程直接同步执行，同样安全；
+- 启动建窗（pano-app setup）在主线程 setup 回调里，不在 WebView2 IPC 回调上下文中，安全，无需改动。
+
 ## M3 —— 增强与打磨
 
 - 配置热重载完善（自定义参数变更 + 回滚机制）；

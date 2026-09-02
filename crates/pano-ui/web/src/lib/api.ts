@@ -16,6 +16,7 @@ export interface AdapterInfo {
   description: string;
   version: string;
   capabilities: string[];
+  series: string[];
   status: string;
   running: boolean;
   enabled: boolean;
@@ -44,6 +45,14 @@ export interface MonitorInfo {
   position: [number, number];
   size: [number, number];
   scale_factor: number;
+}
+
+export interface WindowInfo {
+  id: string;
+  title: string;
+  series: string[];
+  is_manager: boolean;
+  visible: boolean;
 }
 
 /** 命令封装：参数名用 camelCase，Tauri 自动映射为 Rust 的 snake_case。 */
@@ -75,6 +84,20 @@ export const api = {
 
   windowSetMonitor: (label: string, monitorId: string) =>
     invoke<void>("window_set_monitor", { label, monitorId }),
+
+  windowHide: (label: string) => invoke<void>("window_hide", { label }),
+
+  windowShow: (label: string) => invoke<void>("window_show", { label }),
+
+  listWindows: () => invoke<WindowInfo[]>("list_windows"),
+
+  createWindow: (id: string, title: string, series: string[]) =>
+    invoke<void>("create_window", { id, title, series }),
+
+  setWindowSeries: (id: string, series: string[]) =>
+    invoke<void>("set_window_series", { id, series }),
+
+  destroyWindow: (id: string) => invoke<void>("destroy_window", { id }),
 
   monitors: () => invoke<MonitorInfo[]>("monitors"),
 

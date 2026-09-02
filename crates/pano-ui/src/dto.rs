@@ -16,6 +16,8 @@ pub struct AdapterInfo {
     pub version: String,
     /// 能力标签列表（含 `RemoteSource` 标记）。
     pub capabilities: Vec<String>,
+    /// 本适配器输出的全部 series（「分配适配器」页枚举可选指标）。
+    pub series: Vec<String>,
     /// 状态（`AdapterStatus` 的 Display 文案）。
     pub status: String,
     /// 是否处于运行状态（前端徽标绿色判定）。
@@ -72,6 +74,19 @@ pub struct MonitorDto {
     pub scale_factor: f64,
 }
 
+/// 窗口管理页 / 托盘「窗口列表」的一行信息。
+#[derive(Debug, Clone, Serialize)]
+pub struct WindowInfoDto {
+    pub id: String,
+    pub title: String,
+    /// 该窗口展示的 series。
+    pub series: Vec<String>,
+    /// 是否为固定管理窗口（不可销毁）。
+    pub is_manager: bool,
+    /// 当前是否可见。
+    pub visible: bool,
+}
+
 impl From<&pano_window::MonitorInfo> for MonitorDto {
     fn from(info: &pano_window::MonitorInfo) -> Self {
         Self {
@@ -94,6 +109,7 @@ impl AdapterInfo {
         description: String,
         version: String,
         capabilities: Vec<String>,
+        series: Vec<String>,
         status: &AdapterStatus,
         enabled: bool,
         sampling_ms: u64,
@@ -110,6 +126,7 @@ impl AdapterInfo {
             description,
             version,
             capabilities,
+            series,
             status: status.to_string(),
             running,
             enabled,
@@ -285,6 +302,7 @@ mod tests {
             String::new(),
             "0.1.0".into(),
             vec!["TimeSeries".into()],
+            vec!["example.counter.value".into()],
             &AdapterStatus::Running,
             true,
             200,
@@ -292,6 +310,7 @@ mod tests {
         );
         assert!(info.running);
         assert_eq!(info.status, "运行中");
+        assert_eq!(info.series, vec!["example.counter.value"]);
         assert!(info.last_error.is_none());
 
         let err = AdapterInfo::new(
@@ -299,6 +318,7 @@ mod tests {
             String::new(),
             String::new(),
             String::new(),
+            vec![],
             vec![],
             &AdapterStatus::Error {
                 last_error: "boom".into(),

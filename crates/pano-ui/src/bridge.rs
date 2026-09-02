@@ -12,6 +12,9 @@ use crate::dto::SampleEventDto;
 /// 前端监听的事件名（core 样本推送）。
 pub const EVENT_SAMPLE: &str = "pano://sample";
 
+/// 前端监听的事件名（窗口 series 变更，命令层定向 emit 给目标窗口）。
+pub const EVENT_WINDOW_SERIES: &str = "pano://window-series";
+
 /// 启动桥接任务：在 tauri 异步运行时上订阅 SampleStore，样本到达即 emit。
 ///
 /// 前端加载完成后先拉取快照（`series_history` 命令）再增量订阅；
