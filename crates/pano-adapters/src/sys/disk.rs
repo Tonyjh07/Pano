@@ -82,6 +82,15 @@ impl Adapter for SysDisk {
         ]
     }
 
+    fn series(&self) -> Vec<SeriesId> {
+        let id = self.meta().id;
+        vec![
+            SeriesId::new(&id, METRIC_USED_PERCENT),
+            SeriesId::new(&id, METRIC_USED_BYTES),
+            SeriesId::new(&id, METRIC_TOTAL_BYTES),
+        ]
+    }
+
     fn config_schema(&self) -> ConfigSchema {
         ConfigSchema {
             fields: vec![ConfigField {

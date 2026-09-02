@@ -74,6 +74,13 @@ impl Adapter for SysCpu {
         ]
     }
 
+    fn series(&self) -> Vec<SeriesId> {
+        vec![
+            SeriesId::new(&self.meta().id, METRIC_USAGE),
+            SeriesId::new(&self.meta().id, METRIC_CORES),
+        ]
+    }
+
     fn config_schema(&self) -> ConfigSchema {
         ConfigSchema {
             fields: vec![ConfigField {

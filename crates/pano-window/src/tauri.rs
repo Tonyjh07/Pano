@@ -115,6 +115,15 @@ impl WindowService for TauriWindowService {
         handle.focus()
     }
 
+    fn destroy(&self, id: &str) -> Result<(), WindowError> {
+        tracing::info!(target: "pano::window", id, "销毁窗口");
+        self.handle(id)?.destroy()
+    }
+
+    fn is_visible(&self, id: &str) -> Result<bool, WindowError> {
+        self.handle(id)?.is_visible()
+    }
+
     fn monitors(&self) -> Result<Vec<MonitorInfo>, WindowError> {
         let monitors: Vec<MonitorInfo> = self
             .app
@@ -200,6 +209,18 @@ impl WindowHandle for TauriWindowHandle {
         self.window
             .hide()
             .map_err(|e| WindowError::Other(format!("关闭（隐藏）窗口失败：{e}")))
+    }
+
+    fn destroy(&self) -> Result<(), WindowError> {
+        self.window
+            .destroy()
+            .map_err(|e| WindowError::Other(format!("销毁窗口失败：{e}")))
+    }
+
+    fn is_visible(&self) -> Result<bool, WindowError> {
+        self.window
+            .is_visible()
+            .map_err(|e| WindowError::Other(format!("读取可见性失败：{e}")))
     }
 
     fn geometry(&self) -> Result<WindowGeometry, WindowError> {

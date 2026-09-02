@@ -330,6 +330,9 @@ pub trait Adapter: Send + Sync {
     /// 提供的能力标签。
     fn capabilities(&self) -> Vec<Capability>;
 
+    /// 本适配器会输出的全部 series（管理界面「分配适配器」据此枚举可选指标）。
+    fn series(&self) -> Vec<SeriesId>;
+
     /// 自定义配置的 schema，供管理界面渲染表单。
     fn config_schema(&self) -> ConfigSchema;
 
