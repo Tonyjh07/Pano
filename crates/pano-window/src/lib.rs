@@ -92,6 +92,15 @@ pub trait WindowHandle: Send + Sync {
     /// 关闭 = 隐藏（不退出进程；退出仅经托盘「退出」，M1.1 语义延续）。
     fn close(&self) -> Result<(), WindowError>;
 
+    /// 销毁窗口（彻底关闭并从窗口管理器移除；区别于 `close` = 隐藏）。
+    ///
+    /// 销毁后该窗口的 `handle` / `exists` 不再可用；当前窗口列表
+    /// （管理页 / 托盘）由上层注册表同步移除。
+    fn destroy(&self) -> Result<(), WindowError>;
+
+    /// 是否可见（管理页窗口列表展示隐藏 / 显示状态）。
+    fn is_visible(&self) -> Result<bool, WindowError>;
+
     /// 读取当前几何（供布局持久化记录）。
     fn geometry(&self) -> Result<WindowGeometry, WindowError>;
 }
@@ -122,6 +131,12 @@ pub trait WindowService: Send + Sync {
 
     /// 显示并聚焦窗口（托盘「打开」命令）。
     fn show(&self, id: &str) -> Result<(), WindowError>;
+
+    /// 销毁窗口（彻底关闭并从窗口管理器移除；区别于 `hide` = 隐藏）。
+    fn destroy(&self, id: &str) -> Result<(), WindowError>;
+
+    /// 窗口是否可见。
+    fn is_visible(&self, id: &str) -> Result<bool, WindowError>;
 
     /// 枚举全部显示器。
     fn monitors(&self) -> Result<Vec<MonitorInfo>, WindowError>;
@@ -169,6 +184,12 @@ mod tests {
         }
         fn close(&self) -> Result<(), WindowError> {
             Ok(())
+        }
+        fn destroy(&self) -> Result<(), WindowError> {
+            Ok(())
+        }
+        fn is_visible(&self) -> Result<bool, WindowError> {
+            Ok(true)
         }
         fn geometry(&self) -> Result<WindowGeometry, WindowError> {
             Ok(WindowGeometry {
@@ -220,6 +241,21 @@ mod tests {
         fn show(&self, id: &str) -> Result<(), WindowError> {
             self.hide(id)
         }
+        fn destroy(&self, id: &str) -> Result<(), WindowError> {
+            let mut map = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+            if map.remove(id).is_some() {
+                Ok(())
+            } else {
+                Err(WindowError::WindowNotFound(id.into()))
+            }
+        }
+        fn is_visible(&self, id: &str) -> Result<bool, WindowError> {
+            if self.exists(id) {
+                Ok(true)
+            } else {
+                Err(WindowError::WindowNotFound(id.into()))
+            }
+        }
         fn monitors(&self) -> Result<Vec<MonitorInfo>, WindowError> {
             Ok(vec![monitor_info()])
         }
@@ -265,6 +301,15 @@ mod tests {
         service.hide("chart-a").expect("隐藏成功");
         let err = service.handle("missing").err().expect("缺失窗口应失败");
         assert!(matches!(err, WindowError::WindowNotFound(_)));
+
+        // 可见性 / 销毁（区别于隐藏：destroy 后窗口不存在）
+        assert!(service.is_visible("chart-a").expect("可见"));
+        service.destroy("chart-a").expect("销毁成功");
+        assert!(!service.exists("chart-a"), "销毁后窗口不再存在");
+        assert!(matches!(
+            service.handle("chart-a").err().expect("应失败"),
+            WindowError::WindowNotFound(_)
+        ));
 
         let _monitors = service.monitors().unwrap();
         let _primary = service.primary_monitor().unwrap();

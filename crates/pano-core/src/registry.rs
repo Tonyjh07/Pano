@@ -64,7 +64,9 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::{AdapterContext, AdapterError, AdapterMeta, AdapterStatus, ConfigSchema};
+    use crate::adapter::{
+        AdapterContext, AdapterError, AdapterMeta, AdapterStatus, ConfigSchema, SeriesId,
+    };
     use crate::capability::Capability;
 
     struct DummyAdapter {
@@ -83,6 +85,10 @@ mod tests {
 
         fn capabilities(&self) -> Vec<Capability> {
             vec![Capability::new(Capability::TIME_SERIES)]
+        }
+
+        fn series(&self) -> Vec<SeriesId> {
+            vec![SeriesId::new(&self.id, "value")]
         }
 
         fn config_schema(&self) -> ConfigSchema {

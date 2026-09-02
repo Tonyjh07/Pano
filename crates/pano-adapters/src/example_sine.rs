@@ -90,6 +90,10 @@ impl Adapter for ExampleSine {
         vec![Capability::new(Capability::TIME_SERIES)]
     }
 
+    fn series(&self) -> Vec<SeriesId> {
+        vec![SeriesId::new(&self.meta().id, METRIC)]
+    }
+
     fn config_schema(&self) -> ConfigSchema {
         ConfigSchema {
             fields: vec![

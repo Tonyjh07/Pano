@@ -78,6 +78,16 @@ impl Adapter for SysMem {
         ]
     }
 
+    fn series(&self) -> Vec<SeriesId> {
+        let id = self.meta().id;
+        vec![
+            SeriesId::new(&id, METRIC_USED_PERCENT),
+            SeriesId::new(&id, METRIC_USED_BYTES),
+            SeriesId::new(&id, METRIC_TOTAL_BYTES),
+            SeriesId::new(&id, METRIC_SWAP_PERCENT),
+        ]
+    }
+
     fn config_schema(&self) -> ConfigSchema {
         ConfigSchema {
             fields: vec![ConfigField {

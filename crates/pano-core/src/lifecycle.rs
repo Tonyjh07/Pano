@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tokio::runtime::Handle;
 
-use crate::adapter::{AdapterContext, AdapterId, AdapterMeta, AdapterStatus, SampleSink};
+use crate::adapter::{AdapterContext, AdapterId, AdapterMeta, AdapterStatus, SampleSink, SeriesId};
 use crate::capability::UISpec;
 use crate::config::{AdapterConfig, PanoConfig};
 use crate::error::CoreError;
@@ -173,6 +173,11 @@ impl Lifecycle {
         self.registry.get(id).map(|a| a.capabilities())
     }
 
+    /// 适配器输出的全部 series（管理界面「分配适配器」枚举可选指标）。
+    pub fn series_of(&self, id: &AdapterId) -> Option<Vec<SeriesId>> {
+        self.registry.get(id).map(|a| a.series())
+    }
+
     /// 适配器自定义配置 schema（供管理页渲染表单）。
     pub fn config_schema_of(&self, id: &AdapterId) -> Option<crate::adapter::ConfigSchema> {
         self.registry.get(id).map(|a| a.config_schema())
@@ -300,6 +305,10 @@ mod tests {
 
         fn capabilities(&self) -> Vec<Capability> {
             vec![Capability::new(Capability::TIME_SERIES)]
+        }
+
+        fn series(&self) -> Vec<SeriesId> {
+            vec![SeriesId::new(&self.id, "value")]
         }
 
         fn config_schema(&self) -> ConfigSchema {

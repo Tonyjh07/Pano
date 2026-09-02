@@ -79,6 +79,14 @@ impl Adapter for SysNet {
         ]
     }
 
+    fn series(&self) -> Vec<SeriesId> {
+        let id = self.meta().id;
+        vec![
+            SeriesId::new(&id, METRIC_RECV),
+            SeriesId::new(&id, METRIC_SENT),
+        ]
+    }
+
     fn config_schema(&self) -> ConfigSchema {
         ConfigSchema {
             fields: vec![ConfigField {
