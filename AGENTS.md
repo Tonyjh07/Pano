@@ -51,7 +51,7 @@
 
 ### 2.6 配置
 
-- `pano.toml`：`schema_version`、`[core]`、`[adapters.<id>]`（固定字段 `enabled`、`sampling`，其余为该适配器自定义字段）、`[window.<id>]`（布局持久化：位置 / 大小 / 所在显示器）
+- `pano.toml`：`schema_version`、`[core]`、`[adapters.<id>]`（固定字段 `enabled`、`sampling`，其余为该适配器自定义字段）、`[ui]`（M2.2：持久化监控窗口 id 列表）、`[window.<id>]`（窗口持久化：`component` 组件绑定 + `title` 标题覆盖 + 布局位置 / 大小 / 所在显示器）
 - 热重载：修改配置 → 写回文件 → **仅重启受影响适配器**；失败回滚原配置；布局持久化写回与热重载写文件由 pano-app 协调串行（见架构 §13）
 
 ## 3. 测试规范

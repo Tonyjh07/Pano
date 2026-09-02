@@ -118,6 +118,25 @@
 - **托盘重建线程**：`refresh_tray_now()` 在 async 命令（tokio 线程）里调用 → `TrayIcon::set_menu` 的 `run_item_main_thread` 阻塞等待主线程执行菜单任务；主线程空闲时会处理，不构成死锁（仅短暂占用 tokio worker）。`destroy_window`（同步命令，主线程内）调 `refresh_tray_now` 时 `send_user_message` 检测到主线程直接同步执行，同样安全；
 - 启动建窗（pano-app setup）在主线程 setup 回调里，不在 WebView2 IPC 回调上下文中，安全，无需改动。
 
+## M2.2 —— UI 组件（用户新需求）
+
+**设计**：`docs/ui.md` §2/§3.2/§4、`docs/architecture.md` §7（窗口 = 组件类型实例）、本文档。方案 A（用户确认）——**UI 组件 = 自带固定 series 的模板**，取代「窗口直接指定 series」。
+
+- `UISpec.components` 即**组件目录**：每个 `ComponentSpec` 含 `id` / `name` / 固定 `series` / 默认 `window`；
+- 监控窗口 = 组件类型实例：`WindowEntry` 改存 `{ title, component }`（**不再直接存 series**），series 由目录解析；多窗口可绑定同一组件；切换组件 = 仅换内容（`pano://window-component` 事件重载），标题 / 几何不动；
+- 命令层：`list_components`（含 `available`：全部 series 所属适配器已注册；未注册组件置灰）、`window_content`、`create_window(id, component, title?)`、`set_window_component(id, component)`（替代 `set_window_series`）；
+- **窗口集合持久化**（用户确认）：`[ui].windows` 段 = 监控窗口 id 列表（**段缺失** = 首次运行按目录播种并写回；**空列表** = 用户删光窗口保持为空）；`[window.<id>]` 段持久化 `component` + `title` + 布局；运行时新建 / 切换 / 销毁写回配置，重启恢复；
+- 默认组件目录基于 sys 适配器（cpu / mem / disk / net 各一组件），示例组件保留（默认 feature 下置灰不可选）；
+- 前端：`renderers.ts` 按组件 id 分派渲染器；M2.2 通用渲染 = 组件 series 逐个「数值卡 + 曲线」（`TimeSeriesPanel.svelte`）。
+
+**实现说明 / 遗留**：
+
+- **前端单测缺口延续**：命令层校验逻辑抽纯函数并补 Rust 单测；前端 `renderers` 渲染器分派暂以 Vitest 覆盖纯函数，组件渲染级单测（Svelte 组件测试方案）此前已弃用（见 M2.1 记录）；
+- **M2.3 示例 UI 组件**：新增一个组件目录项 + 专用 Svelte 渲染器 + `renderers.ts` 映射，验证「换组件 = 换渲染」的可替换性（用户将在 M2.3 提出具体要求）；
+- **配置升级**：M2.1 既有 `[window.<id>]` 布局段在 M2.2 首次运行时因缺 `[ui].windows` 段会触发按目录播种并写回（旧布局段被覆盖为组件 + 布局）；已知边界，文档注明；
+- `component_series` 命令更名为 `window_content`（返回 component + series）；`pano://window-series` 事件更名为 `pano://window-component`；
+- 动态窗口「仅布局记忆、集合不持久化」的 M2.1 未定项已在本里程碑按用户选择定稿为「集合持久化」。
+
 ## M3 —— 增强与打磨
 
 - 配置热重载完善（自定义参数变更 + 回滚机制）；

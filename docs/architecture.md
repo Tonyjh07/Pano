@@ -53,6 +53,7 @@
 | `WindowHandle` | 组件持有的窗口控制句柄：全屏 / 置顶 / 显示器 / 位置 / 可见性（§13） |
 | `WindowSpec` | 组件声明的窗口需求：标题 / 尺寸 / 置顶 / 全屏 / 显示器偏好（§13） |
 | `MonitorId` | 显示器标识，用于「绑定特定显示器」（§13） |
+| `ComponentSpec` | **UI 组件类型**（M2.2，`UISpec.components` 目录）：一种「窗口内容形态」，自带固定 series + 默认窗口规格（§7） |
 
 ## 3. Adapter trait（M1 定稿，M1.2 不变）
 
@@ -136,19 +137,20 @@ WebView 前端组件 listen → 更新数值卡 / 实时曲线
 
 ## 7. UI 声明所需适配器（可替换 UI 的关键）
 
-> 类型归属（M1.2 审查定稿）：`Capability` / `UISpec` / `ComponentSpec` / `WindowSpec` 均为**纯数据声明**，定义在 `pano-core`（`capability.rs`）；`pano-window` 允许引用这些纯数据声明，但不依赖 core 的任何运行逻辑（见 §13）。
+> 类型归属（M1.2 审查定稿，M2.2 扩展）：`Capability` / `UISpec` / `ComponentSpec` / `WindowSpec` 均为**纯数据声明**，定义在 `pano-core`（`capability.rs`）；`pano-window` 允许引用这些纯数据声明，但不依赖 core 的任何运行逻辑（见 §13）。
 
 ```rust
 // M1.2 扩展：UISpec 增加组件清单（组件与窗口分离，R1）
 pub struct UISpec {
     pub requires: Vec<Capability>,       // 本 UI 必须满足的能力
-    pub components: Vec<ComponentSpec>,  // 监控组件及其窗口需求（管理窗口不在其中，见下）
+    pub components: Vec<ComponentSpec>,  // 组件目录（组件类型清单；窗口 = 实例，由播种/新建产生）
 }
 
 pub struct ComponentSpec {
-    pub id: String,                      // 组件 id：全小写 ASCII、连字符分隔（如 "counter-chart"）
-    pub series: Vec<SeriesId>,           // 本组件消费的指标
-    pub window: WindowSpec,              // 窗口需求声明（纯数据）
+    pub id: String,                      // 组件类型 id：全小写 ASCII、连字符分隔（如 "sys-cpu"）
+    pub name: String,                    // M2.2：组件显示名（如 "CPU 使用率"）
+    pub series: Vec<SeriesId>,           // 本组件固定消费的指标（窗口由此解析，不再直接存 series）
+    pub window: WindowSpec,              // 默认窗口需求声明（纯数据）
 }
 
 pub struct WindowSpec {
@@ -161,17 +163,26 @@ pub struct WindowSpec {
 }
 ```
 
+**UI 组件类型（M2.2）**：
+
+- `UISpec.components` 即**组件目录**：每个 `ComponentSpec` 描述一种「窗口内容形态」——`id`（全小写 ASCII、连字符分隔）、`name`（显示名）、`series`（该组件**固定消费**的指标）、`window`（默认窗口规格）；
+- **窗口 = 组件类型实例**：每个监控窗口绑定一个组件类型 id（`WindowEntry.component`），其展示的 series **由目录解析得出**（窗口不再直接存 series）；运行时注册表以窗口 id 为键，**多个窗口可绑定同一组件类型**；
+- **切换组件 = 换内容**：对已开窗口 `set_window_component` 切换其组件类型（series 随之切换），命令层向该窗口 emit `pano://window-component` 事件，前端据此重载；窗口标题 / 几何不动；
+- **组件目录可用性**：`list_components` 返回全部组件并附 `available`（全部 series 所属适配器已注册）；适配器未注册（feature 未编译）的组件置灰不可选，已注册但未启用的组件可选但窗口显示空态；
+- **窗口集合持久化**（M2.2）：`[ui].windows` 段持久化监控窗口 id 列表。**段缺失**（`Option::None`）= 首次运行，按组件目录播种并写回；**段存在但列表为空** = 用户已销毁全部监控窗口，保持为空不重播种。`[window.<id>]` 段持久化 `component`（组件绑定）、`title`（窗口标题覆盖）与既有布局字段；运行时新建 / 切换 / 销毁窗口写回配置，重启恢复；
+- 换组件 = 换渲染形态：前端按组件类型 id 分派渲染器（`renderers.ts`）；M2.2 通用渲染 = 组件 series 逐个「数值卡 + 曲线」；M2.3 将实现一个**示例 UI 组件**（新增目录项 + 专用 Svelte 渲染器）验证可替换性。
+
 - **管理窗口**（1 个）不属于 `components`：由 pano-app 固定创建（内含适配器管理页 + 设置页），是 pano-ui 内置的固定窗口；
-- **建窗时机**：仅当组件的 `series` 存在数据源（对应适配器已启用）时才创建组件窗口；无数据源组件不建窗（空态在管理窗口提示，见 ui.md §4）；
+- **首次播种时机**：仅当组件的 `series` 存在数据源（对应适配器**已启用**）时才按目录播种组件窗口；无数据源组件不播种（在「窗口管理」页提示）。**用户新建窗口**可绑定已注册但未启用的组件（窗口内显示空态），仅对应适配器**未注册**（feature 未编译）的组件不可选；
 - `WindowSpec.monitor` 在 core 侧为**字符串序列化形式**（`Option<String>`），由 pano-ui / pano-window 侧解析为 `MonitorId`（`MonitorId` 类型定义在 pano-window，属窗口领域，core 不引用）；布局持久化的 `[window.<id>]` 段同样存序列化形式。
 
 `pano-app` 启动流程：
 
 1. 按 feature 构建适配器注册表；
-2. 加载配置（含 `[window.<id>]` 布局持久化段），启用相应适配器；
+2. 加载配置（含 `[ui].windows` 窗口集合与 `[window.<id>]` 组件 / 布局持久化段），启用相应适配器；
 3. **能力校验**：`UISpec.requires ⊆ 已启用适配器的能力并集`；不满足 → 明确报错（提示缺哪个适配器 / feature）退出；
 4. 启动 core，装配窗口服务（pano-window），把 `CoreHandle`（只读 API）+ `WindowService` 交给 UI；
-5. 固定创建管理窗口；按 `components` 逐个创建监控组件窗口（窗口服务按 `WindowSpec` 建窗，优先恢复 `[window.<id>]` 持久化布局）并挂载组件内容。
+5. 固定创建管理窗口；监控窗口按 `[ui].windows` 持久化集合创建（缺省 = 首次运行，按组件目录播种并写回）；窗口服务按 `WindowSpec` 建窗，优先恢复 `[window.<id>]` 持久化布局。
 
 效果：
 
@@ -279,7 +290,7 @@ pano/
 
 - `pano-window` 不依赖 core 的**运行逻辑**（lifecycle / sample_store / config 等），允许引用 core 的**纯数据声明**（`WindowSpec` / `ComponentSpec`，§7）；不依赖 adapters / ui；
 - `pano-ui` 依赖 pano-window（仅取 `WindowHandle` / `MonitorId` 等类型）；
-- `pano-app` 装配：创建 `WindowService` 实例（默认 Tauri v2 实现），按 UISpec.components 建窗。
+- `pano-app` 装配：创建 `WindowService` 实例（默认 Tauri v2 实现），按 `[ui].windows` 持久化窗口集合 / 组件目录播种建窗。
 
 与 Tauri 的对应：
 
