@@ -4,11 +4,17 @@
 //! `tauri::State<AppState>` 访问。文件写入（pano.toml）留在 pano-app
 //! 侧经 `save_config` 回调注入，保证与 core 热重载写文件串行协调
 //! （架构 §13：段级合并，避免并发写）。
+//!
+//! 窗口管理（M2.1）：运行时窗口注册表 [`AppState::windows`] 是「当前
+//! 存在哪些监控窗口」的唯一来源。启动时由 pano-app 从 `UISpec.components`
+//! 播种（连同固定管理窗口），随后「窗口管理」命令层在此增删改；托盘
+//! 「窗口列表」经 [`RefreshTrayFn`] 回调据此重建。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use pano_core::adapter::SeriesId;
 use pano_core::capability::UISpec;
 use pano_core::config::WindowLayout;
 use pano_core::lifecycle::Lifecycle;
@@ -18,6 +24,18 @@ use pano_window::WindowService;
 /// 配置持久化回调：序列化当前配置并写回 `pano.toml`（pano-app 注入）。
 pub type SaveConfigFn = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
 
+/// 托盘「窗口列表」重建回调（pano-app 注入；窗口增删后调用）。
+pub type RefreshTrayFn = Arc<dyn Fn() + Send + Sync>;
+
+/// 运行时窗口注册表条目：窗口 id → 内容（标题 + 展示的 series）。
+#[derive(Debug, Clone)]
+pub struct WindowEntry {
+    /// 窗口标题。
+    pub title: String,
+    /// 该窗口展示的 series（可跨适配器）。
+    pub series: Vec<SeriesId>,
+}
+
 /// pano-app 装配的共享状态。
 pub struct AppState {
     /// 核心编排（适配器启停 / 配置 / 状态查询）。
@@ -26,7 +44,7 @@ pub struct AppState {
     pub store: Arc<SampleStore>,
     /// 窗口服务（窗口控制一律经此，命令层不接触 Tauri 窗口类型）。
     pub window_service: Arc<dyn WindowService>,
-    /// 本 UI 的能力与组件声明（组件 → series 映射的唯一来源）。
+    /// 本 UI 的能力与组件声明（启动播种窗口注册表；此后以注册表为准）。
     pub ui_spec: UISpec,
     /// pano.toml 路径（供展示）。
     pub config_path: PathBuf,
@@ -34,6 +52,10 @@ pub struct AppState {
     pub save_config: SaveConfigFn,
     /// 窗口布局记忆（运行时内存，写回 pano.toml 由 pano-app 串行协调）。
     window_layouts: Arc<Mutex<HashMap<String, WindowLayout>>>,
+    /// 运行时窗口注册表（管理窗口 + 监控窗口；「窗口管理」页与托盘共用）。
+    windows: Arc<Mutex<HashMap<String, WindowEntry>>>,
+    /// 托盘「窗口列表」重建回调（pano-app 在 build_tray 后注入）。
+    refresh_tray: Arc<Mutex<Option<RefreshTrayFn>>>,
 }
 
 impl AppState {
@@ -56,6 +78,8 @@ impl AppState {
             config_path,
             save_config,
             window_layouts,
+            windows: Arc::new(Mutex::new(HashMap::new())),
+            refresh_tray: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -67,5 +91,27 @@ impl AppState {
     /// 窗口布局记忆映射（pano-app / 命令层读写）。
     pub fn window_layouts(&self) -> &Arc<Mutex<HashMap<String, WindowLayout>>> {
         &self.window_layouts
+    }
+
+    /// 运行时窗口注册表（pano-app 启动播种 + 命令层增删改）。
+    pub fn windows(&self) -> &Arc<Mutex<HashMap<String, WindowEntry>>> {
+        &self.windows
+    }
+
+    /// 托盘「窗口列表」重建回调槽位（pano-app 注入；调用时若无注入则无操作）。
+    pub fn refresh_tray(&self) -> &Arc<Mutex<Option<RefreshTrayFn>>> {
+        &self.refresh_tray
+    }
+
+    /// 触发托盘「窗口列表」重建（无注入回调时静默跳过，如 headless 测试）。
+    pub fn refresh_tray_now(&self) {
+        if let Some(f) = self
+            .refresh_tray
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            f();
+        }
     }
 }

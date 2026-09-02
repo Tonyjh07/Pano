@@ -191,7 +191,7 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                 Arc::clone(&layouts),
             ));
 
-            // 6b. 固定创建管理窗口（ui.md §2：1 个，页签 = 适配器 + 设置）
+            // 6b. 固定创建管理窗口（ui.md §2：1 个，页签 = 适配器 + 窗口 + 设置）
             let manager_layout = setup_core
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -205,9 +205,21 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                     manager_layout.as_ref(),
                 )
                 .map_err(|e| anyhow::anyhow!("创建管理窗口失败：{e}"))?;
+            // 管理窗口计入运行时注册表（窗口管理页 / 托盘「窗口列表」，不可销毁）
+            {
+                let state = app.state::<AppState>();
+                let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
+                windows.insert(
+                    "manager".to_string(),
+                    pano_ui::state::WindowEntry {
+                        title: pano_ui::manager_window_spec().title,
+                        series: Vec::new(),
+                    },
+                );
+            }
 
             // 6c. 按 components 创建监控组件窗口（仅当组件的 series 存在数据源，
-            //     架构 §7「建窗时机」；无数据源组件不建窗）
+            //     架构 §7「建窗时机」；无数据源组件不建窗），并计入运行时注册表
             for component in &ui_spec.components {
                 let has_source = {
                     let lc = setup_core.lock().unwrap_or_else(|e| e.into_inner());
@@ -233,14 +245,33 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                 window_service
                     .create_window(&component.id, &component.window, layout.as_ref())
                     .map_err(|e| anyhow::anyhow!("创建组件窗口 {} 失败：{e}", component.id))?;
+                {
+                    let state = app.state::<AppState>();
+                    let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
+                    windows.insert(
+                        component.id.clone(),
+                        pano_ui::state::WindowEntry {
+                            title: component.window.title.clone(),
+                            series: component.series.clone(),
+                        },
+                    );
+                }
             }
 
             // 6d. 事件桥接：SampleStore → 前端事件（架构 §4 / ui.md §6，无轮询）
             let bridge_store = app.state::<AppState>().store.clone();
             pano_ui::bridge::spawn_bridge(app.handle().clone(), bridge_store);
 
-            // 6e. 托盘（主进程侧）：打开管理窗口 / 组件窗口列表 / 退出
-            build_tray(app, &ui_spec, &setup_core)?;
+            // 6e. 托盘（主进程侧）：打开管理窗口 / 窗口列表（动态）/ 退出
+            let refresh_tray = build_tray(app, &setup_core)?;
+            // 注入托盘重建回调（窗口增删时命令层据此刷新「窗口列表」）
+            {
+                let state = app.state::<AppState>();
+                *state
+                    .refresh_tray()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(refresh_tray);
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -278,32 +309,24 @@ fn build_save_config(
 }
 
 /// 构建系统托盘（失败降级为无托盘模式，不阻塞启动）。
+///
+/// 返回「窗口列表」重建回调：窗口增删后（窗口管理命令层）调用，
+/// 按运行时注册表重建托盘菜单（Tauri `TrayIcon::set_menu` 热更新）。
 fn build_tray(
     app: &tauri::App,
-    ui_spec: &pano_core::capability::UISpec,
     core: &Arc<Mutex<Lifecycle>>,
-) -> Result<()> {
-    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+) -> Result<Arc<dyn Fn() + Send + Sync>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder};
 
     let open_manager = MenuItemBuilder::with_id("open_manager", "打开管理窗口").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
 
-    // 监控组件窗口列表（动态：随 UISpec 声明）
-    let mut components_builder = SubmenuBuilder::new(app, "监控组件窗口");
-    for component in &ui_spec.components {
-        components_builder = components_builder.item(
-            &MenuItemBuilder::with_id(
-                format!("component:{}", component.id),
-                &component.window.title,
-            )
-            .build(app)?,
-        );
-    }
-    let components = components_builder.build()?;
+    // 窗口列表（动态：随运行时注册表重建）
+    let windows_submenu = build_window_submenu(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&open_manager)
-        .item(&components)
+        .item(&windows_submenu)
         .separator()
         .item(&quit)
         .build()?;
@@ -326,10 +349,10 @@ fn build_tray(
                     let _ = handle.focus();
                 }
             }
-            id if id.starts_with("component:") => {
-                let component = &id["component:".len()..];
+            id if id.starts_with("window:") => {
+                let label = &id["window:".len()..];
                 let state = app.state::<AppState>();
-                if let Ok(handle) = state.window_service.handle(component) {
+                if let Ok(handle) = state.window_service.handle(label) {
                     let _ = handle.show();
                     let _ = handle.focus();
                 }
@@ -360,8 +383,59 @@ fn build_tray(
         .build(app)
         .context("创建托盘失败（将降级为无托盘模式）")?;
 
-    let _ = tray;
-    Ok(())
+    // 重建回调：读运行时注册表重建「窗口列表」子菜单
+    let app_handle = app.handle().clone();
+    let tray_handle = tray;
+    let refresh = Arc::new(move || {
+        let state = app_handle.state::<AppState>();
+        let submenu = build_window_submenu_from_registry(&app_handle, &state);
+        match submenu {
+            Ok(submenu) => {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder};
+                let open_manager =
+                    MenuItemBuilder::with_id("open_manager", "打开管理窗口").build(&app_handle);
+                let quit = MenuItemBuilder::with_id("quit", "退出").build(&app_handle);
+                let (open_manager, quit) = match (open_manager, quit) {
+                    (Ok(o), Ok(q)) => (o, q),
+                    _ => return,
+                };
+                let menu = MenuBuilder::new(&app_handle)
+                    .item(&open_manager)
+                    .item(&submenu)
+                    .separator()
+                    .item(&quit)
+                    .build();
+                if let Ok(menu) = menu {
+                    let _ = tray_handle.set_menu(Some(menu));
+                }
+            }
+            Err(error) => {
+                tracing::warn!(target: "pano::app", error = %error, "重建托盘窗口列表失败");
+            }
+        }
+    });
+    Ok(refresh)
+}
+
+/// 按运行时注册表构建「窗口列表」子菜单（启动建托盘 + 动态重建共用）。
+fn build_window_submenu(app: &tauri::App) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+    let state = app.state::<AppState>();
+    build_window_submenu_from_registry(app.handle(), &state)
+}
+/// 由注册表构建「窗口列表」子菜单的具体实现（AppHandle 版，动态重建用）。
+fn build_window_submenu_from_registry<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &tauri::State<'_, AppState>,
+) -> tauri::Result<tauri::menu::Submenu<R>> {
+    use tauri::menu::{MenuItemBuilder, SubmenuBuilder};
+    let windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
+    let mut builder = SubmenuBuilder::new(app, "窗口列表");
+    for (id, entry) in windows.iter() {
+        builder = builder
+            .item(&MenuItemBuilder::with_id(format!("window:{id}"), &entry.title).build(app)?);
+    }
+    let submenu = builder.build()?;
+    Ok(submenu)
 }
 
 fn init_tracing(log_file: Option<&std::path::Path>) -> Result<()> {
