@@ -52,7 +52,7 @@
 | crate | `pano-<领域>` | pano-core / pano-ui / pano-window |
 | adapter id | `<域>.<名称>`，全小写 ASCII，连字符分隔 | `example.counter` / `sys.cpu` |
 | series id | `<adapter_id>.<指标>` | `example.counter.value` |
-| component id | 全小写 ASCII，连字符分隔，全局唯一 | `counter-chart` |
+| component id（组件类型 id，即监控窗口 label 源） | 全小写 ASCII，连字符分隔，全局唯一 | `sys-cpu` |
 | capability | 上驼峰，语义化 | `TimeSeries` / `SystemInfo` / `RemoteSource` |
 | trait | 上驼峰名词 | `Adapter` / `SampleSink` / `WindowService` |
 | 模块 | 小写下划线 | `registry` / `sample_store` / `window` |
@@ -100,7 +100,7 @@
 ## 8. 配置规范
 
 - 运行时配置：`pano.toml`（放用户配置目录，M1 定路径；开发期可放项目根目录）。
-- 顶层字段：`schema_version`（当前 1）、`[core]`（默认采样策略等）、`[adapters.<id>]`、`[window.<id>]`（布局持久化：位置 / 大小 / 所在显示器，由窗口服务读写）。
+- 顶层字段：`schema_version`（当前 1）、`[core]`（默认采样策略等）、`[adapters.<id>]`、`[ui]`（M2.2：持久化监控窗口 id 列表 `windows`）、`[window.<id>]`（窗口持久化：`component` 组件绑定 + `title` 标题覆盖 + 布局 `position` / `size` / `monitor`，由命令层 / 窗口服务读写）。
 - 每个适配器配置段固定字段：`enabled`、`sampling`（如 `"500ms"`），其余为该适配器自定义字段（远程适配器如 `url` / `headers` / `token` 等）。
 - 配置加载失败 → 启动报错并明确提示，不静默。
 - **热重载原则**：管理界面修改配置 → 写回文件 → 仅重启受影响的适配器（M1 实现启用/停用与采样间隔；复杂参数热重载 M3 完善）。
