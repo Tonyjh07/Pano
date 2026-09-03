@@ -2,11 +2,13 @@
   // 可复用 SVG 半圆仪表（M2.3）：0-100 刻度、红区（阈值→100）、指针、指示灯。
   // 几何：0% 在左、100% 在右，半圆过顶点（时钟 9 点 → 12 点 → 3 点方向）。
   // point(v) = (cx + R·cosθ, cy − R·sinθ)，θ = π·(1 − v/100)。
-  let { value, threshold, label, size = 240 }: {
+  let { value, threshold, label, size = 240, detail = null }: {
     value: number | null;
     threshold: number;
     label: string;
     size?: number;
+    /** 副读数（M2.3.1：磁盘仪表显示最忙盘符，如 `C:`）。 */
+    detail?: string | null;
   } = $props();
 
   const v = $derived(value === null ? 0 : Math.min(100, Math.max(0, value)));
@@ -87,6 +89,9 @@
     <span class="light" class:alarmed title={alarmed ? "占用偏高" : "正常"}></span>
     <span class="label">{label}</span>
   </div>
+  {#if detail}
+    <span class="detail">{detail}</span>
+  {/if}
 </div>
 
 <style>
@@ -139,6 +144,12 @@
     font-weight: 600;
     min-width: 42px;
     text-align: right;
+  }
+  .detail {
+    color: var(--accent, #4f9cf9);
+    font-family: var(--mono, monospace);
+    font-size: 12px;
+    letter-spacing: 0.5px;
   }
   .value.alarmed {
     color: var(--err, #f85149);

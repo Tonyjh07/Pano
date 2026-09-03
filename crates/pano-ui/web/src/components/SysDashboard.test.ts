@@ -15,9 +15,17 @@ vi.mock("../lib/api", async (importOriginal) => {
 
 import SysDashboard from "./SysDashboard.svelte";
 
+const SERIES = [
+  "sys.cpu.usage",
+  "sys.mem.used_percent",
+  "sys.disk.active_percent",
+  "sys.disk.busiest_disk",
+  "sys.net.utilization",
+];
+
 describe("SysDashboard", () => {
-  function latest(map: Record<string, number>) {
-    const out: Record<string, { series: string; timestamp_ms: number; value: number }> = {};
+  function latest(map: Record<string, number | string>) {
+    const out: Record<string, { series: string; timestamp_ms: number; value: number | string }> = {};
     for (const [k, v] of Object.entries(map)) {
       out[k] = { series: k, timestamp_ms: 0, value: v };
     }
@@ -27,17 +35,13 @@ describe("SysDashboard", () => {
   it("renders the four dashboard gauges with labels", () => {
     const { container } = render(SysDashboard, {
       props: {
-        seriesList: [
-          "sys.cpu.usage",
-          "sys.mem.used_percent",
-          "sys.disk.active_percent",
-          "sys.net.utilization",
-        ],
+        seriesList: SERIES,
         samples: {},
         latest: latest({
           "sys.cpu.usage": 10,
           "sys.mem.used_percent": 40,
           "sys.disk.active_percent": 30,
+          "sys.disk.busiest_disk": "C:",
           "sys.net.utilization": 5,
         }),
       },
@@ -51,20 +55,51 @@ describe("SysDashboard", () => {
     expect(container.querySelectorAll(".light.alarmed").length).toBe(0);
   });
 
+  it("shows the busiest disk letter on the disk gauge (M2.3.1)", () => {
+    const { container } = render(SysDashboard, {
+      props: {
+        seriesList: SERIES,
+        samples: {},
+        latest: latest({
+          "sys.cpu.usage": 10,
+          "sys.mem.used_percent": 40,
+          "sys.disk.active_percent": 87,
+          "sys.disk.busiest_disk": "E:",
+          "sys.net.utilization": 5,
+        }),
+      },
+    });
+    expect(container.querySelector(".detail")!.textContent).toBe("E:");
+    // 磁盘活动超默认阈值 80 → 指示灯亮红
+    expect(container.querySelectorAll(".light.alarmed").length).toBe(1);
+  });
+
+  it("omits the disk detail when busiest_disk is unavailable (e.g. non-Windows)", () => {
+    const { container } = render(SysDashboard, {
+      props: {
+        seriesList: SERIES,
+        samples: {},
+        latest: latest({
+          "sys.cpu.usage": 10,
+          "sys.mem.used_percent": 40,
+          "sys.disk.active_percent": 30,
+          "sys.net.utilization": 5,
+        }),
+      },
+    });
+    expect(container.querySelector(".detail")).toBeNull();
+  });
+
   it("lights red for metrics above the default threshold (80)", () => {
     const { container } = render(SysDashboard, {
       props: {
-        seriesList: [
-          "sys.cpu.usage",
-          "sys.mem.used_percent",
-          "sys.disk.active_percent",
-          "sys.net.utilization",
-        ],
+        seriesList: SERIES,
         samples: {},
         latest: latest({
           "sys.cpu.usage": 95,
           "sys.mem.used_percent": 40,
           "sys.disk.active_percent": 30,
+          "sys.disk.busiest_disk": "C:",
           "sys.net.utilization": 5,
         }),
       },

@@ -38,4 +38,18 @@ describe("Gauge", () => {
     expect(container.querySelector(".value")!.textContent).toBe("—");
     expect(container.querySelector(".light")!.classList.contains("alarmed")).toBe(false);
   });
+
+  it("shows the detail sub-readout when provided (M2.3.1)", () => {
+    const { container } = render(Gauge, {
+      props: { value: 50, threshold: 80, label: "磁盘活动", detail: "E:" },
+    });
+    expect(container.querySelector(".detail")!.textContent).toBe("E:");
+  });
+
+  it("omits the detail line when absent", () => {
+    const { container } = render(Gauge, {
+      props: { value: 50, threshold: 80, label: "CPU 使用率" },
+    });
+    expect(container.querySelector(".detail")).toBeNull();
+  });
 });
