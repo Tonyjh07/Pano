@@ -174,7 +174,7 @@ pub struct WindowSpec {
 
 **数据源增强（M2.3）**：专用组件可能消费适配器新 series / 配置：
 
-- `sys.disk.active_percent`（磁盘活动率，近似忙碌时间）：以 sysinfo `DiskUsage.read_bytes + written_bytes`（自上次刷新增量）判定采样点是否有读写 IO，滑动窗口最近 10 点活跃比例 × 100；
+- `sys.disk.active_percent`（磁盘活动率）= 当前**最忙磁盘**的真实忙碌时间 %（0..=100）：Windows 用 PDH `\PhysicalDisk(*)\% Disk Time` 逐盘采集、取非 `_Total` 实例最大值（真实忙碌时间，非字节速率；空闲时趋近 0，重负载趋近 100；统计范围为系统全部物理磁盘，`device` 过滤仅作用于容量系列）；配套 `sys.disk.busiest_disk`（Text，最忙盘盘符如 `C:`）供 UI 显示。**Windows 先行**，Linux / macOS 暂未实现（不产出该 series）；
 - `sys.net.utilization`（链路利用率）=（recv_bps + sent_bps）/（参考带宽）× 100（钳 0..=100），参考带宽 `link_mbps` 可配（默认 1000 Mbps）；
 - `high_threshold`（四个 sys 适配器通用配置，Number 默认 80，域 0..=100）：**高占用阈值**，供仪表盘指示灯判定。属「适配器自定义字段」：适配器自身不使用，仅作为数据源配置暴露；UI 经 `list_adapters` 返回的 `config`（当前自定义配置值）读取，未配置回落默认。
 

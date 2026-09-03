@@ -31,8 +31,9 @@ enabled = true
 sampling = 1000
 # device = "C:"     # 仅统计磁盘名 / 挂载点包含该子串的设备
 # high_threshold = 80
-# 注：磁盘适配器另推送 sys.disk.active_percent（磁盘活动率，近似忙碌时间，
-#     滑动窗口最近 10 个采样点中有读写 IO 的比例）
+# 注：磁盘适配器另推送 sys.disk.active_percent（磁盘活动率 = 当前最忙磁盘的
+#     真实忙碌时间 %，Windows 用 PDH %DiskTime，Windows 先行）与
+#     sys.disk.busiest_disk（最忙盘盘符，如 "C:"）
 
 [adapters."sys.net"]
 enabled = true
