@@ -143,19 +143,20 @@
 
 **数据源增强（sys 适配器）**：
 
-- `sys.disk.active_percent`（Number，%）：**磁盘活动率**（近似「磁盘忙碌时间」）。以 sysinfo `DiskUsage.read_bytes + written_bytes`（自上次刷新的增量）判定该采样点是否有读写 IO；滑动窗口取最近 10 个采样点中活跃比例 × 100（活动率纯函数可单测）；
+- `sys.disk.active_percent`（Number，%）：**磁盘活动率 = 当前最忙磁盘的真实忙碌时间 %**（0..=100）。Windows 用 PDH `\PhysicalDisk(*)\% Disk Time` 逐盘采集、取**非 `_Total` 实例中的最大值**（真实忙碌时间，非字节速率）；统计范围为**系统全部物理磁盘**（`device` 过滤仅作用于容量系列，不作用于忙碌时间）；`sys.disk.busiest_disk`（Text）为该最忙盘的盘符（如 `C:`，供 UI 显示）。**Windows 先行**；Linux / macOS 暂未实现（不产出该 series，仪表显示「—」）；
 - `sys.net.utilization`（Number，%）：**链路利用率** =（recv_bps + sent_bps）/（参考带宽）× 100，钳制 0..=100；参考带宽 `link_mbps` 可配（Number，默认 1000 = 1 Gbps；`1 Mbps = 125_000 B/s`）；
 - 四个 sys 适配器各增配置字段 `high_threshold`（Number，默认 80，合法域 0..=100）：**高占用阈值**（仪表盘指示灯判定用；适配器自身不使用该值，仅作为数据源配置暴露）。前端经 `list_adapters` 返回的 `config`（当前自定义配置值）读取，未配置回落默认 80。
 
-**组件目录**：`sys-dashboard`（name「资源仪表盘」），固定 series = `sys.cpu.usage` + `sys.mem.used_percent` + `sys.disk.active_percent` + `sys.net.utilization`；默认窗口标题「资源仪表盘」、尺寸 860×540。
+**组件目录**：`sys-dashboard`（name「资源仪表盘」），固定 series = `sys.cpu.usage` + `sys.mem.used_percent` + `sys.disk.active_percent` + `sys.disk.busiest_disk` + `sys.net.utilization`；默认窗口标题「资源仪表盘」、尺寸 860×540。
 
 **专用渲染器 `SysDashboard.svelte`**（`renderers.ts` 注册 `sys-dashboard`）：
 
 - 汽车仪表盘式布局：左右两个**大仪表**（CPU、内存占用率），下方两个**小仪表**（磁盘活动率、网络利用率）；SVG 半圆弧刻度 0-100 + 指针 + 红区（阈值→100）；
+- **磁盘仪表显示最忙盘符与活动率**：磁盘仪表的盘符取自 `sys.disk.busiest_disk`（如 `C:`），数值取自 `sys.disk.active_percent`（该最忙盘忙碌 %）；
 - 每个仪表下方一个**指示灯**：该指标占用率超其适配器 `high_threshold`（缺省 80）→ 亮红，否则绿色；
-- 数据取自通用窗口管道（ComponentWindow 传 seriesList / samples / latest），仪表显示 `latest` 瞬时值；`Gauge.svelte` 为可复用 SVG 半圆仪表（参数化大小 / 阈值 / 红区）。
+- 数据取自通用窗口管道（ComponentWindow 传 seriesList / samples / latest），仪表显示 `latest` 瞬时值；`Gauge.svelte` 为可复用 SVG 半圆仪表（参数化大小 / 阈值 / 红区 / 副读数 detail）。
 
-**验收**：`cargo tauri dev` 后在「窗口管理」新建窗口绑定「资源仪表盘」（或删除 pano.toml 中的 `[ui]` / `[window.<id>]` 段——段缺失 = 首次运行，触发按目录播种并写回）；四个仪表实时反映占用，任一指标超阈值其指示灯变红。
+**验收**：`cargo tauri dev` 后在「窗口管理」新建窗口绑定「资源仪表盘」（或删除 pano.toml 中的 `[ui]` / `[window.<id>]` 段——段缺失 = 首次运行，触发按目录播种并写回）；四个仪表实时反映占用，任一指标超阈值其指示灯变红；**磁盘仪表显示当前最忙盘符（如 `C:`）与活动率，空闲时活动率低、不恒满**。
 
 ## M3 —— 增强与打磨
 
