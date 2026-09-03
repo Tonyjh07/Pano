@@ -6,15 +6,22 @@ vi.mock("./TimeSeriesPanel.svelte", () => ({ default: { __mock: true } }));
 
 import { renderers, resolveRenderer } from "./renderers";
 import TimeSeriesPanel from "./TimeSeriesPanel.svelte";
+import SysDashboard from "./SysDashboard.svelte";
 
 describe("renderers", () => {
   it("unregistered component id falls back to generic TimeSeriesPanel", () => {
     expect(resolveRenderer("ghost-component")).toBe(TimeSeriesPanel);
   });
 
-  it("catalog components without dedicated renderer also fall back", () => {
-    // M2.2：sys-* 组件均走通用渲染；M2.3 起注册专用渲染器后此处应命中
+  it("catalog components without dedicated renderer fall back", () => {
+    // M2.3：仅 sys-dashboard 注册专用渲染器，其余 sys-* 组件仍走通用渲染
     expect(resolveRenderer("sys-cpu")).toBe(TimeSeriesPanel);
+    expect(resolveRenderer("sys-net")).toBe(TimeSeriesPanel);
+  });
+
+  it("sys-dashboard dispatches to the dedicated SysDashboard renderer", () => {
+    expect(resolveRenderer("sys-dashboard")).toBe(SysDashboard);
+    expect(renderers["sys-dashboard"]).toBe(SysDashboard);
   });
 
   it("registered renderer is dispatched by component id", () => {

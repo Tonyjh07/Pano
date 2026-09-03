@@ -10,6 +10,11 @@ export interface FieldInfo {
   help: string | null;
 }
 
+export interface ConfigValueDto {
+  key: string;
+  value: number | boolean | string | Record<string, unknown> | unknown[] | null;
+}
+
 export interface AdapterInfo {
   id: string;
   name: string;
@@ -23,6 +28,14 @@ export interface AdapterInfo {
   sampling_ms: number;
   last_error: string | null;
   schema: FieldInfo[];
+  /** 当前自定义配置值（M2.3：high_threshold / link_mbps 等；未配置则无该项）。 */
+  config: ConfigValueDto[];
+}
+
+/** 从适配器 config 中读取数值型自定义配置（缺省回落 `fallback`）。 */
+export function configNumber(adapter: AdapterInfo | undefined, key: string, fallback: number): number {
+  const v = adapter?.config.find((c) => c.key === key)?.value;
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 
 export interface SampleEvent {
