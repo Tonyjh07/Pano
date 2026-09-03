@@ -622,10 +622,8 @@ mod tests {
     fn sys_dashboard_catalog_series_includes_busiest_disk() {
         // M2.3.1：磁盘仪表显示最忙盘符，sys-dashboard 组件订阅 busiest_disk
         let spec = crate::uispec();
-        let series: Vec<&str> = component_series_of(&spec, "sys-dashboard")
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
+        let catalog_series = component_series_of(&spec, "sys-dashboard");
+        let series: Vec<&str> = catalog_series.iter().map(|s| s.as_str()).collect();
         assert_eq!(series.len(), 5);
         assert!(series.contains(&"sys.disk.active_percent"));
         assert!(series.contains(&"sys.disk.busiest_disk"));
