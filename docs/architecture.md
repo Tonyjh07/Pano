@@ -270,10 +270,10 @@ pano/
 
 ## 12. 扩展点总结
 
-- 新适配器三步接入：实现 trait → 加 feature 并注册 → 加配置段（+ 一致性测试）；远程适配器可复用 §14 基座；
+- 新适配器三步接入：实现 trait → 加 feature 并注册 → 加配置段（+ 一致性测试）；远程适配器可复用 §14 基座（M4：外部服务进程，§14.1）；
 - 新指标展示：UI 按 series id 订阅渲染即可，无需改适配器；
 - 新窗口能力：在 pano-window 的 `WindowHandle` API 上扩展，UI 组件零改动；
-- 预留插件化边界：trait 与 context 只传 `&dyn` / 不透明句柄、不泄漏内部类型，未来可平滑拆 cdylib 动态加载。
+- **插件化（M4，取代 cdylib 预留）**：适配器插件 = 外部服务进程（HTTP + WS，§14.1）；UI 插件 = web dist 运行期装载（`ui-plugin://`，§15）；cdylib 动态加载仅作**未来可选**的本地高性能路径，不在 M4 范围；trait 与 context 只传 `&dyn` / 不透明句柄、不泄漏内部类型，保持该边界以便未来演进。
 
 ## 13. 窗口服务（pano-window，R1/R2 落地）
 
@@ -309,7 +309,7 @@ pano/
 
 ## 14. 远程数据源预留（R3）
 
-**动机**：适配器可能从远程获取数据——HTTP API 轮询（如 REST / Prometheus）或 WebSocket 推送（实时流）。M1.2 只做**能力预留与共享基座**，不实现具体远程适配器。
+**动机**：适配器可能从远程获取数据——HTTP API 轮询（如 REST / Prometheus）或 WebSocket 推送（实时流）。M1.2 只做**能力预留与共享基座**，不实现具体远程适配器；M4 在此基础上升级为「外部适配器服务」（外部进程 = 服务端，Pano = 客户端），协议见 §14.1。
 
 预留落点（已确认决策）：
 
@@ -348,3 +348,76 @@ pub struct AdapterContext {
 - `Adapter` trait 与既有适配器零改动；新远程适配器只需在 `start` 里使用注入的 `HttpClient`（或自建连接）即可；
 - core 的依赖面不膨胀（抽象在 core，实现与具体依赖在 adapters / pano-app 装配层）；
 - 生命周期契约不变：`stop` 返回后不得再产出样本（WS 型需在 stop 中关闭连接并 join 接收任务）。
+
+### 14.1 远程适配器服务端协议（M4，外部服务 = 独立进程）
+
+M4 把 §14 的「远程数据源」升级为「外部适配器服务」：适配器作为**独立服务进程**运行（外部 adapter = 服务端），Pano 进程内由**远程适配器宿主**代理接入——core 编排与 UI 完全无感本地 / 远程。**Pano 内不新增 server 面**：客户端角色（HTTP 客户端 + WS 客户端）由宿主（pano-adapters `remote/`）承担，core 仅编排（决策见 roadmap M4）。
+
+**外部服务契约**（由外部适配器实现；跨语言 Rust / Go / Python）：
+
+HTTP 生命周期 API（控制面，Pano 侧由宿主作为 HTTP 客户端调用）：
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /metadata` | 返回适配器元信息：`{ id, name, version, capabilities, series, config_schema }`（与 `AdapterMeta` / `Capability` / `ConfigSchema` / `SeriesId` 同构，serde JSON） |
+| `POST /start` | 请求体 = 自定义配置（含 `sampling`）→ 启动采集 |
+| `POST /stop` | 停止采集（幂等） |
+| `POST /reload-config` | 配置热重载（请求体 = 新配置） |
+| `GET /status` | 运行状态 → 映射 `AdapterStatus` |
+
+WebSocket 数据面：`/stream`，持续推送标准化 `Sample` JSON（单条或数组）：`{ series, timestamp_ms, value }`——`value` 支持 Number / Bool / Text / Json，与 `SampleValue` 同构。
+
+**远程适配器宿主**（进程内，`pano-adapters/src/remote/`，实现 `Adapter` trait）：
+
+- `start` = `GET /metadata`（校验 id / series / capabilities 与声明一致）→ `POST /start` → 连接 WS `/stream` → 消息解析转发 `sink.push`；
+- `stop` = `POST /stop` + 关闭 WS + join 接收任务（「stop 后不再产出样本」语义保持）；
+- 配置变更 → `POST /reload-config`；
+- 连接失败 / 断线：宿主内部退避重连（1s / 2s / 4s … 封顶 60s，§9），状态映射 `AdapterStatus`（连接中 = `Starting`，断线 = `Error` + 计数，UI 可见）；
+- `sampling` 经 `/start` config 交给外部服务由其遵守；core 不二次采样（样本经 WS 异步到达）。
+
+**接入与注册（管理面板主动连接，决策见 roadmap M4）**：
+
+- 命令层新增 `connect_remote(endpoint, token?)` / `disconnect_remote(id)`，但**宿主构造与注册不由 pano-ui 直接完成**（避免 `pano-ui → pano-adapters` 依赖，违反铁律 / spec §3）：`pano-app` 装配层向 pano-ui 注入工厂回调（沿用 `AppState.save_config` 的 `SaveConfigFn` 模式），pano-ui 命令层仅转发用户输入；由 pano-app 完成「宿主构造（pano-adapters `remote/`）→ core 动态注册 → 启动」；`connect_remote` 亦可作为 pano-app 注册的 Tauri 命令；
+- 流程：`connect_remote` → `GET /metadata`（内部一致性校验：id 格式合法、series 前缀 = adapter id、capability 为已知值；与已注册 id 冲突 → 沿用 `DuplicateAdapter` 语义拒绝并提示）→ 实例化宿主 → **动态注册进 Registry**（core 新增运行期注册路径）→ 启动；
+- 连接关系持久化到 `[adapters."<id>"].remote`（`endpoint` 必填、`token` 可选 → 注入 `Authorization` / 自定义头）；写回 pano.toml 与热重载 / 布局持久化同走 §13「pano-app 串行协调、段级合并」；启动时按配置恢复连接（自动重连）；
+- 安全：默认仅限 localhost 使用（文档建议）；token 可选；生产环境由部署方管控端口暴露。
+
+**协议语义约定（实现期定稿）**：
+
+- WS 断线重连后需**重新 `POST /start`**（除非外部服务约定独立持续采集并缓冲——该约定可扩展，文档以「重连 = 重新 start」为默认语义）；
+- `POST /stop` = 停止采集并断流（幂等）；
+- 样本时间戳：以外部服务 `timestamp_ms` 为准（默认 localhost 部署，本地 / 远程 series 同图对齐；跨机时钟对齐为后续增强，不在本里程碑范围）；
+- `Adapter::status()` 同步返回：宿主缓存 WS 连接状态（断线 = `Error`）为主，`GET /status` 为可选轮询补充；
+- 宿主 `start` / `stop` 的 HTTP 调用失败 → 宿主进入 `Error` + 退避，不崩溃进程（§9）。
+
+**测试**：loopback 假外部服务（测试内起本地 HTTP + WS 服务模拟 `remote.demo`），跑一致性测试——主 series「首样本到达」判定（异步推送，采样周期判定不适用）+ 非法配置拒绝 + stop 后无样本。
+
+## 15. 动态 UI 插件（M4）
+
+**动机**：UI 组件运行期可替换——从磁盘加载第三方前端 dist，不重编译主二进制。延续「组件与窗口分离」：插件 = 一种组件类型（同 `ComponentSpec` 语义），装载形态可换（决策见 roadmap M4：每插件独立 WebviewWindow）。
+
+**插件目录与 manifest**：
+
+- 目录位置：`ui-plugins/` 与 `pano.toml` 同目录约定对齐（用户配置目录；开发期可放项目根目录）；`ui-plugins/<plugin-id>/manifest.json` + `dist/`（构建产物，入口 `index.html`）；
+- `manifest.json`：`{ "id", "name", "version", "min_pano_version", "series": [...], "window": {...}, "entry": "index.html" }`——`series` / `window` 与 `ComponentSpec` 同构（纯数据，serde）；
+- 启动扫描：pano-app 装配时扫描 `ui-plugins/`，解析 manifest，与编译期 `UISpec.components` **合并**成运行期组件目录——合并后的目录由 pano-app 装配层持有并注入 pano-ui 状态（`AppState.ui_spec` 扩展为合并目录），core 仅消费（能力校验 / series 解析），不新增目录所有权；`list_components` 一并返回（含 `available` 判定）；无效 manifest（缺字段 / id 冲突 / `min_pano_version` 不足）→ warn 跳过，不阻塞启动。
+
+**装载与隔离**：
+
+- Tauri 自定义协议 `ui-plugin://<plugin-id>/<path>`：只服务该插件 `dist/`（路径规范化，防 `..` 穿越）；
+- 插件窗口 = 独立 `WebviewWindow`，加载 `ui-plugin://<plugin-id>/<manifest.entry>`（缺省 `index.html`）；与 M2.2「1 窗口 = 1 组件、多窗口可绑定同一组件」一致——插件组件实例各自独立 WebviewWindow（隔离最干净，决策见 roadmap M4）；`window` 段为默认 `WindowSpec`（尺寸 / 位置 / 置顶等），由窗口服务按现有路径创建；
+- 插件经 Tauri ACL 授予**受限 capability**：仅「其声明 series 的事件订阅」+「建窗 / 窗口控制命令」（`WindowSpec → core → 窗口服务`）；插件**不持有窗口实现、不调用适配器逻辑**（铁律 / issue §4）；
+- 数据复用现有事件桥（SampleStore → Tauri 事件 → 插件窗口 listen），插件侧拿到与编译期组件一致的 `seriesList / samples / latest` 管道。
+
+**安全边界**：
+
+- 文件：协议只读本插件目录，路径规范化防穿越；
+- 权限：ACL 按插件最小化授予，不授予全局 IPC；
+- 校验：manifest 字段校验；可选 dist 哈希 / 签名校验（后续增强，非 M4 必选）；
+- 卸载 = 删除 `ui-plugins/<plugin-id>/`，**下次启动扫描时清理**相关窗口绑定并消失（插件按启动扫描装载，非热加载）；主二进制不变。
+
+**对既有路径的影响（零破坏）**：
+
+- core：组件目录由「编译期常量」扩展为「编译期 + 运行期合并」——`ComponentSpec` 纯数据不变，新增目录提供方；
+- pano-window：窗口服务新增「按 URL 装载」（`ui-plugin://`）的建窗路径，控制 API 不变；
+- 编译期组件（sys-dashboard 等）行为不变；无 `ui-plugins/` 目录 → 行为与现状一致。

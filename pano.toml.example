@@ -8,7 +8,8 @@ schema_version = 1
 sampling_ms = 500
 
 # 每个适配器一段；固定字段：enabled、sampling；其余为该适配器自定义字段
-# M2 起默认特性为系统监控适配器（spec §5），示例 / 远程适配器需显式启用对应 feature 并在此配置
+# M2 起默认特性为系统监控适配器（spec §5）；示例适配器需显式启用对应 feature；
+# 远程适配器（M4）不经 feature，由管理面板「连接远程适配器」发起并写回 remote 段（见下方）
 
 # --- 系统监控（默认 feature）---
 # 每个 sys 适配器可配 high_threshold（高占用阈值 %，默认 80，0..=100）：
@@ -55,18 +56,19 @@ sampling = 1000
 # amplitude = 1.0
 # frequency = 1.0
 
-# --- 远程数据源示例（规划中：M2 远程示例适配器 `adapter-remote-http-sample` /
-#     `adapter-remote-ws-sample` 尚未实现，feature 尚不存在；实现后按此配置）---
-# [adapters."remote.http-sample"]
+# --- 远程适配器（M4，外部 adapter = 独立服务；管理面板「连接远程适配器」发起并写回本段）---
+# 外部服务契约：HTTP 生命周期 API（GET /metadata、POST /start、POST /stop、
+# POST /reload-config、GET /status）+ WebSocket 数据面 /stream（推送标准化 Sample JSON）。
+# 连接成功后会写回如下 remote 段，重启自动恢复连接（架构 §14.1）。
+# [adapters."remote.demo"]
 # enabled = true
-# sampling = 1000
-# url = "http://127.0.0.1:9000/value"   # 必填：GET 端点，返回 JSON，取 `value` 字段
-# # headers = '{"Authorization": "Bearer xxx"}'   # 可选：附加请求头（JSON 文本）
-#
-# [adapters."remote.ws-sample"]
-# enabled = true
-# sampling = 1000                          # 推送节流周期（高频消息按此合并）
-# url = "ws://127.0.0.1:9001/stream"       # 必填：WebSocket 端点，推送 JSON 文本，取 `value` 字段
+# remote = { endpoint = "http://127.0.0.1:9000", token = "optional-token" }
+# # sampling = 1000        # 经 /start config 交给外部服务由其遵守（core 不二次采样）
+
+# --- 动态 UI 插件（M4，ui-plugins 目录）---
+# 把第三方插件 dist 放到 ui-plugins/<plugin-id>/（含 manifest.json + dist/），
+# 启动时扫描并合并进组件目录（架构 §15）；插件经 ui-plugin://<plugin-id>/ 加载，
+# 每插件独立窗口，仅授予其声明 series 的事件与建窗/窗口控制权限。
 
 # --- 窗口集合与布局持久化（M2.2，架构 §13）---
 # [ui].windows = 监控窗口 id 列表（**段缺失** = 首次运行，启动按组件目录播种并写回；
