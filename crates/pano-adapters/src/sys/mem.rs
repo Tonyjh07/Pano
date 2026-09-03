@@ -6,7 +6,9 @@
 //!   - `sys.mem.total_bytes`（Number）
 //!   - `sys.mem.swap_percent`（Number，可选）：`swap = true` 时额外推送交换分区使用率。
 //! - 自定义配置：
-//!   - `swap`（Bool，默认 `false`）—— 是否额外推送交换分区使用率。
+//!   - `swap`（Bool，默认 `false`）—— 是否额外推送交换分区使用率；
+//!   - `high_threshold`（Number，默认 80，域 0..=100，M2.3）—— 高占用阈值
+//!     （仪表盘指示灯判定用；适配器自身不使用，仅作配置暴露）。
 //! - 能力：`SystemInfo` + `TimeSeries`。
 
 use std::collections::HashMap;
@@ -90,18 +92,23 @@ impl Adapter for SysMem {
 
     fn config_schema(&self) -> ConfigSchema {
         ConfigSchema {
-            fields: vec![ConfigField {
-                key: KEY_SWAP.to_string(),
-                label: "交换分区".to_string(),
-                kind: FieldKind::Bool,
-                default: ConfigValue::Bool(false),
-                help: Some("是否额外推送交换分区使用率（sys.mem.swap_percent）".to_string()),
-            }],
+            fields: vec![
+                ConfigField {
+                    key: KEY_SWAP.to_string(),
+                    label: "交换分区".to_string(),
+                    kind: FieldKind::Bool,
+                    default: ConfigValue::Bool(false),
+                    help: Some("是否额外推送交换分区使用率（sys.mem.swap_percent）".to_string()),
+                },
+                super::high_threshold_field(),
+            ],
         }
     }
 
     fn start(&mut self, ctx: AdapterContext) -> Result<(), AdapterError> {
         let swap = Self::resolve_swap(&ctx.config)?;
+        // 校验高占用阈值（M2.3）：非法配置在启动即拒绝（一致性测试要求）。
+        super::resolve_high_threshold(&ctx.config)?;
         self.status = AdapterStatus::Running;
 
         let sink = ctx.sink.clone();
@@ -215,8 +222,12 @@ mod tests {
     fn conformance() {
         let mut adapter = SysMem::new();
         let valid = HashMap::new();
+        // 非法 high_threshold 也应在启动即拒绝（M2.3）
         let mut invalid = HashMap::new();
-        invalid.insert(KEY_SWAP.to_string(), ConfigValue::Number(1.0));
+        invalid.insert(
+            crate::sys::KEY_HIGH_THRESHOLD.to_string(),
+            ConfigValue::Number(-1.0),
+        );
         let series = SeriesId::new(&adapter.meta().id, METRIC_USED_PERCENT);
         pano_core::test_harness::run_all(
             &mut adapter,
