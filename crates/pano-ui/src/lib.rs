@@ -67,6 +67,22 @@ pub fn uispec() -> UISpec {
                     ..WindowSpec::default()
                 },
             },
+            // 资源仪表盘（M2.3）：汽车仪表盘式总览，专用渲染器 SysDashboard.svelte
+            ComponentSpec {
+                id: "sys-dashboard".into(),
+                name: "资源仪表盘".into(),
+                series: vec![
+                    SeriesId::new(&AdapterId::new("sys.cpu"), "usage"),
+                    SeriesId::new(&AdapterId::new("sys.mem"), "used_percent"),
+                    SeriesId::new(&AdapterId::new("sys.disk"), "active_percent"),
+                    SeriesId::new(&AdapterId::new("sys.net"), "utilization"),
+                ],
+                window: WindowSpec {
+                    title: "资源仪表盘".into(),
+                    size: (860.0, 540.0),
+                    ..WindowSpec::default()
+                },
+            },
             // 示例适配器组件（默认 feature 下适配器未注册 → 目录中置灰不可选）
             ComponentSpec {
                 id: "counter-chart".into(),

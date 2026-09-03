@@ -30,6 +30,15 @@ pub struct AdapterInfo {
     pub last_error: Option<String>,
     /// 配置表单 schema（自定义字段）。
     pub schema: Vec<FieldInfo>,
+    /// 当前自定义配置值（如 M2.3 的 `high_threshold` / `link_mbps`；未配置则无该项）。
+    pub config: Vec<ConfigValueDto>,
+}
+
+/// 当前自定义配置值（key → value；M2.3 起供仪表盘等读取阈值 / 参考带宽）。
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigValueDto {
+    pub key: String,
+    pub value: serde_json::Value,
 }
 
 /// 配置表单字段（由 `config_schema` 驱动渲染，前端不硬编码适配器参数）。
@@ -134,6 +143,7 @@ impl AdapterInfo {
         enabled: bool,
         sampling_ms: u64,
         schema: Vec<FieldInfo>,
+        config: Vec<ConfigValueDto>,
     ) -> Self {
         let (running, last_error) = match status {
             AdapterStatus::Running => (true, None),
@@ -153,6 +163,16 @@ impl AdapterInfo {
             sampling_ms,
             last_error,
             schema,
+            config,
+        }
+    }
+}
+
+impl From<(String, ConfigValue)> for ConfigValueDto {
+    fn from((key, value): (String, ConfigValue)) -> Self {
+        Self {
+            key,
+            value: config_value_to_json(&value),
         }
     }
 }
@@ -315,6 +335,20 @@ mod tests {
     }
 
     #[test]
+    fn config_value_dto_from_roundtrip() {
+        // Number → JSON 数值往返（M2.3 阈值下发契约）
+        let dto = ConfigValueDto::from(("high_threshold".to_string(), ConfigValue::Number(80.0)));
+        assert_eq!(dto.key, "high_threshold");
+        assert_eq!(dto.value, serde_json::json!(80.0));
+
+        let text = ConfigValueDto::from(("device".to_string(), ConfigValue::Text("C:".into())));
+        assert_eq!(text.value, serde_json::json!("C:"));
+
+        let flag = ConfigValueDto::from(("swap".to_string(), ConfigValue::Bool(true)));
+        assert_eq!(flag.value, serde_json::json!(true));
+    }
+
+    #[test]
     fn adapter_info_status_mapping() {
         let info = AdapterInfo::new(
             "example.counter",
@@ -327,12 +361,18 @@ mod tests {
             true,
             200,
             vec![],
+            vec![ConfigValueDto {
+                key: "high_threshold".into(),
+                value: serde_json::json!(80.0),
+            }],
         );
         assert!(info.running);
         assert_eq!(info.status, "运行中");
         assert_eq!(info.series, vec!["example.counter.value"]);
         assert!(info.last_error.is_none());
-
+        assert_eq!(info.config.len(), 1);
+        assert_eq!(info.config[0].key, "high_threshold");
+        assert_eq!(info.config[0].value, serde_json::json!(80.0));
         let err = AdapterInfo::new(
             "x",
             String::new(),
@@ -346,9 +386,11 @@ mod tests {
             true,
             200,
             vec![],
+            vec![],
         );
         assert!(!err.running);
         assert_eq!(err.last_error.as_deref(), Some("boom"));
+        assert!(err.config.is_empty());
     }
 
     #[test]
