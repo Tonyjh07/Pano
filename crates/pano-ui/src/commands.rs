@@ -11,12 +11,12 @@ use pano_core::config::{AdapterConfig, SCHEMA_VERSION};
 use tauri::State;
 
 use crate::dto::{
-    AdapterInfo, ComponentInfo, FieldInfo, MonitorDto, SampleEventDto, StatusDto, WindowContentDto,
-    WindowInfoDto,
+    AdapterInfo, ComponentInfo, ConfigValueDto, FieldInfo, MonitorDto, SampleEventDto, StatusDto,
+    WindowContentDto, WindowInfoDto,
 };
 use crate::state::{AppState, WindowEntry};
 
-/// 适配器列表（管理页表格，schema 驱动表单渲染）。
+/// 适配器列表（管理页表格，schema 驱动表单渲染；含当前自定义配置值）。
 #[tauri::command]
 pub fn list_adapters(state: State<'_, AppState>) -> Vec<AdapterInfo> {
     let lc = state.lifecycle();
@@ -29,6 +29,17 @@ pub fn list_adapters(state: State<'_, AppState>) -> Vec<AdapterInfo> {
         let status = lc.status_of(&id);
         let sampling = lc.config().sampling_ms_of(id.as_str());
         let enabled = lc.config().is_enabled(id.as_str());
+        // 当前自定义配置值（M2.3：high_threshold / link_mbps 等；custom_config
+        // 整体解析失败时忽略该适配器的自定义配置值，仅影响阈值回落默认）
+        let mut config: Vec<ConfigValueDto> = lc
+            .config()
+            .custom_config(id.as_str())
+            .unwrap_or_default()
+            .into_iter()
+            .map(ConfigValueDto::from)
+            .collect();
+        // 按 key 排序，保证 list_adapters 输出顺序跨调用稳定（前端按 key 查找）
+        config.sort_by(|a, b| a.key.cmp(&b.key));
         out.push(AdapterInfo::new(
             id.as_str(),
             meta.as_ref().map(|m| m.name.clone()).unwrap_or_default(),
@@ -42,6 +53,7 @@ pub fn list_adapters(state: State<'_, AppState>) -> Vec<AdapterInfo> {
             enabled,
             sampling,
             schema.fields.iter().map(FieldInfo::from).collect(),
+            config,
         ));
     }
     out
