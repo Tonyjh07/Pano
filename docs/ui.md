@@ -69,7 +69,8 @@
 
 - **配置表单由 `config_schema` 驱动渲染**（数值 / 文本 / 枚举 / 开关），避免 UI 硬编码适配器参数；
 - 修改配置 → **即时生效**：写回 `pano.toml` → 仅重启该适配器；启停 / 采样修改在**后台线程 / 异步命令**中执行（stop 的阻塞不卡 UI），成功 / 失败 toast 提示（M1.1 实测教训，见 roadmap）；
-- 防抖：采样间隔拖动过程不触发重启，`drag_stopped` / 失焦才应用。
+- 防抖：采样间隔拖动过程不触发重启，`drag_stopped` / 失焦才应用；
+- **M4.1**：适配器列表上方提供「连接远程适配器」入口（输入 endpoint + 可选 token）→ `connect_remote` → 成功后在列表出现该远程适配器（状态 / 启停 / 热重载同本地适配器）；连接失败 toast 提示（architecture §14.1）。
 
 ### 3.2 窗口管理（M2.1 + M2.2）
 
@@ -166,3 +167,14 @@
 备选：React / Vue + ECharts（生态更大，包体与复杂度更高）。**前端栈是 pano-ui 内部实现，可在编码前替换，不影响其他层**。
 
 > 决策待确认项：若对前端框架有偏好（如团队更熟 React / Vue），在 M1.2 编码前提出即可，仅影响 `pano-ui/web/` 内部。
+
+## 11. 动态 UI 插件（M4）
+
+动态 UI 插件 = 运行期可装载的组件类型（架构设计见 `architecture.md` §15；决策见 `roadmap.md` M4.2）：
+
+- **目录与 manifest**：`ui-plugins/<plugin-id>/`（`manifest.json` + `dist/`）；manifest 声明 `id / name / version / min_pano_version / series / window / entry`（`series` / `window` 与 `ComponentSpec` 同构）；启动扫描后与编译期组件目录合并成运行期组件目录；
+- **装载**：Tauri 自定义协议 `ui-plugin://<plugin-id>/<path>` 服务插件 `dist/`（路径规范化防穿越）；**每插件组件实例独立 WebviewWindow** 加载 `ui-plugin://<plugin-id>/<manifest.entry>`（缺省 `index.html`）；与 §2「1 窗口 = 1 组件、多窗口可绑定同一组件」一致，插件组件亦可多窗口绑定；
+- **数据管道**：与编译期组件完全一致——`seriesList / samples / latest` 经事件桥推送（§6）；插件前端只需按与主壳相同的 IPC 契约订阅，不依赖主壳内部实现；
+- **权限**：插件窗口 Tauri ACL 仅授予其声明 series 的事件订阅 + 建窗 / 窗口控制命令（`WindowSpec → core → 窗口服务`）；插件不接触窗口实现与适配器逻辑（铁律 / issue §4）；
+- **建窗与切换**：与现有「窗口管理」（§3.2）一致——`list_components` 含插件组件、可绑定窗口、可切换组件（切换 = 换 `ui-plugin://` 装载）；卸载 = 删除插件目录，**下次启动扫描时消失**；
+- **约定**：插件前端为「无框架绑定」的 Web 构建产物（Svelte / React / Vue 皆可，dist 自包含），仅依赖 Pano 注入的 IPC 契约与自定义协议入口。

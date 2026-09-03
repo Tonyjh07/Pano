@@ -33,7 +33,7 @@
 | crate | 类型 | 职责 | 依赖方向 |
 | --- | --- | --- | --- |
 | `pano-core` | lib | 适配器注册表、生命周期、样本存储（环形缓冲）、配置管理、能力匹配 | 仅依赖基础库（tokio/serde 等） |
-| `pano-adapters` | lib | 内置适配器集合；每个适配器一个 feature；远程数据源共享基座 | 依赖 pano-core 的 trait 与 context |
+| `pano-adapters` | lib | 内置适配器集合；每个适配器一个 feature；远程数据源共享基座 + 远程适配器宿主（M4，architecture §14.1） | 依赖 pano-core 的 trait 与 context |
 | `pano-window` | lib | 窗口服务：窗口生命周期、控制 API（全屏/置顶/显示器绑定/位置）、布局持久化 | 不依赖 core 运行逻辑（可引用 core 的纯数据声明）、不依赖 adapters / ui |
 | `pano-ui` | lib | Tauri 前端 + Rust 命令层：组件内容、事件桥接（core→前端）、窗口 API 调用 | 依赖 pano-core 只读 API + pano-window 类型 |
 | `pano-app` | bin | 组装：构建注册表 → 加载配置 → 启动 core → 装配窗口服务 → 挂载 ui | 依赖以上四者 |
@@ -62,7 +62,8 @@
 - 每个内置适配器一个 feature：`adapter-example-counter`、`adapter-example-sine`……
 - 默认特性：M1 为全部示例适配器；M2 起默认只含系统监控适配器。
 - `pano-app` 透传 feature 到 `pano-adapters`；用户通过 `cargo build --features ...` 决定打进哪些适配器。
-- 未启用 feature 的适配器**不参与编译**——「换适配器」= 改 feature 重新编译。
+- 未启用 feature 的适配器**不参与编译**——「换适配器」= 改 feature 重新编译；
+- **M4 起远程适配器不经 feature**：外部服务由 `[adapters."<id>"].remote` 配置 + 管理面板主动连接驱动（architecture §14.1），进程内以**远程适配器宿主**实例化注册，core / UI 无感本地 / 远程；cdylib 动态加载方案已放弃（roadmap M4）。
 
 ## 6. 错误处理规范
 
@@ -84,7 +85,8 @@
 | `CoreError::CapabilityUnsatisfied` | UI 声明的能力无法满足（启动失败） |
 | `WindowError` | 窗口服务错误（定义在 pano-window）：`WindowNotFound` / `MonitorUnavailable` / `AlreadyExists` / `Io` 等 |
 
-- 适配器运行中的错误**不得**让进程崩溃：转为状态 + tracing 日志（见架构 §9 恢复策略）。
+- 适配器运行中的错误**不得**让进程崩溃：转为状态 + tracing 日志（见架构 §9 恢复策略）；
+- **远程适配器（M4）连接错误**由宿主映射进 `AdapterStatus`（连接中 = `Starting`，断线 = `Error` + 退避重连，architecture §14.1），不新增错误枚举；外部服务进程崩溃不影响 core 与其他适配器。
 
 ## 7. 日志规范
 
@@ -101,7 +103,9 @@
 
 - 运行时配置：`pano.toml`（放用户配置目录，M1 定路径；开发期可放项目根目录）。
 - 顶层字段：`schema_version`（当前 1）、`[core]`（默认采样策略等）、`[adapters.<id>]`、`[ui]`（M2.2：持久化监控窗口 id 列表 `windows`）、`[window.<id>]`（窗口持久化：`component` 组件绑定 + `title` 标题覆盖 + 布局 `position` / `size` / `monitor`，由命令层 / 窗口服务读写）。
-- 每个适配器配置段固定字段：`enabled`、`sampling`（如 `"500ms"`），其余为该适配器自定义字段（远程适配器如 `url` / `headers` / `token` 等）。
+- 每个适配器配置段固定字段：`enabled`、`sampling`（如 `"500ms"`），其余为该适配器自定义字段（**发给外部服务的 `/start` 配置**，含 `sampling`；本地适配器即其采集参数）。
+- **M4 远程适配器段**：`[adapters."<id>"]` 增 `remote`（`endpoint` 必填、`token` 可选 → `Authorization` / 自定义头）——**Pano 侧连接信息，不进 `/start` 请求体**，与自定义字段（进 `/start`）区分；连接由管理面板「连接远程适配器」发起并写回，重启自动恢复（architecture §14.1）；
+- **M4 UI 插件目录**：`ui-plugins/<plugin-id>/`（`manifest.json` + `dist/`），启动扫描合并进组件目录（architecture §15）；无该目录 → 行为与现状一致。
 - 配置加载失败 → 启动报错并明确提示，不静默。
 - **热重载原则**：管理界面修改配置 → 写回文件 → 仅重启受影响的适配器（M1 实现启用/停用与采样间隔；复杂参数热重载 M3 完善）。
 
@@ -119,6 +123,7 @@
   1. 生命周期：start → 产出样本 → stop 干净退出；
   2. 采样周期正确（容差内）；
   3. 非法配置返回 `AdapterError::Config`。
+  - **远程适配器宿主（M4）例外**：样本经 WS 异步推送，「采样周期正确」判定不适用——以「首样本到达 + stop 后无样本」判定（architecture §14.1，loopback 假外部服务）。
 - UI 测试：前端单测（Vitest，组件渲染与交互）+ Tauri 命令层单测（Rust）；端到端（Playwright / tauri-driver）M2 起视需要引入。
 - 门禁：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`（M2 起接入 CI）。
 
