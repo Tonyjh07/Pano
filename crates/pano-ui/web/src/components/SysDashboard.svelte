@@ -14,12 +14,25 @@
   } = $props();
 
   // 各仪表 → series id 与适配器 id（阈值按适配器自定义配置 high_threshold 读取）
-  const METRICS = [
+  const METRICS: {
+    key: string;
+    label: string;
+    adapter: string;
+    big: boolean;
+    /** 副读数 series（M2.3.1：磁盘仪表显示最忙盘符）。 */
+    detailSeries?: string;
+  }[] = [
     { key: "sys.cpu.usage", label: "CPU 使用率", adapter: "sys.cpu", big: true },
     { key: "sys.mem.used_percent", label: "内存使用率", adapter: "sys.mem", big: true },
-    { key: "sys.disk.active_percent", label: "磁盘活动", adapter: "sys.disk", big: false },
+    {
+      key: "sys.disk.active_percent",
+      label: "磁盘活动",
+      adapter: "sys.disk",
+      big: false,
+      detailSeries: "sys.disk.busiest_disk",
+    },
     { key: "sys.net.utilization", label: "网络利用率", adapter: "sys.net", big: false },
-  ] as const;
+  ];
 
   // 阈值（%）：listAdapters → config[].high_threshold；未配置回落 80。
   const DEFAULT_THRESHOLD = 80;
@@ -34,6 +47,13 @@
   function metricThreshold(adapter: string): number {
     const a = adapters.find((x) => x.id === adapter);
     return configNumber(a, "high_threshold", DEFAULT_THRESHOLD);
+  }
+
+  /** 副读数（如磁盘仪表的最忙盘符）；非文本值 / 缺失 → null。 */
+  function metricDetail(series: string | undefined): string | null {
+    if (!series) return null;
+    const v = latest[series]?.value;
+    return typeof v === "string" && v.length > 0 ? v : null;
   }
 
   onMount(() => {
@@ -53,12 +73,14 @@
   {#each METRICS as m}
     {@const value = metricValue(m.key)}
     {@const thr = metricThreshold(m.adapter)}
+    {@const detail = metricDetail(m.detailSeries)}
     <div class="cell" class:big={m.big}>
       <Gauge
         value={value}
         threshold={thr}
         label={m.label}
         size={m.big ? 280 : 200}
+        detail={detail}
       />
     </div>
   {/each}
