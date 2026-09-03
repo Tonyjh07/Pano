@@ -67,7 +67,8 @@ pub fn uispec() -> UISpec {
                     ..WindowSpec::default()
                 },
             },
-            // 资源仪表盘（M2.3）：汽车仪表盘式总览，专用渲染器 SysDashboard.svelte
+            // 资源仪表盘（M2.3）：汽车仪表盘式总览，专用渲染器 SysDashboard.svelte。
+            // M2.3.1：磁盘仪表显示最忙盘符，故组件订阅 sys.disk.busiest_disk。
             ComponentSpec {
                 id: "sys-dashboard".into(),
                 name: "资源仪表盘".into(),
@@ -75,6 +76,7 @@ pub fn uispec() -> UISpec {
                     SeriesId::new(&AdapterId::new("sys.cpu"), "usage"),
                     SeriesId::new(&AdapterId::new("sys.mem"), "used_percent"),
                     SeriesId::new(&AdapterId::new("sys.disk"), "active_percent"),
+                    SeriesId::new(&AdapterId::new("sys.disk"), "busiest_disk"),
                     SeriesId::new(&AdapterId::new("sys.net"), "utilization"),
                 ],
                 window: WindowSpec {
