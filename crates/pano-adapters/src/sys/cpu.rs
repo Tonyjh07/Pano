@@ -4,7 +4,9 @@
 //!   - `sys.cpu.usage`（Number，%）：全局平均使用率；
 //!   - `sys.cpu.cores`（Json，可选）：`per_core = true` 时推送各核心使用率数组。
 //! - 自定义配置：
-//!   - `per_core`（Bool，默认 `false`）—— 是否额外推送各核心使用率。
+//!   - `per_core`（Bool，默认 `false`）—— 是否额外推送各核心使用率；
+//!   - `high_threshold`（Number，默认 80，域 0..=100，M2.3）—— 高占用阈值
+//!     （仪表盘指示灯判定用；适配器自身不使用，仅作配置暴露）。
 //! - 能力：`SystemInfo` + `TimeSeries`。
 //!
 //! 注意：CPU 使用率需两次刷新才能得到有效值（首次为 0），首帧无碍。
@@ -83,18 +85,23 @@ impl Adapter for SysCpu {
 
     fn config_schema(&self) -> ConfigSchema {
         ConfigSchema {
-            fields: vec![ConfigField {
-                key: KEY_PER_CORE.to_string(),
-                label: "各核心明细".to_string(),
-                kind: FieldKind::Bool,
-                default: ConfigValue::Bool(false),
-                help: Some("是否额外推送各核心使用率（sys.cpu.cores，JSON 数组）".to_string()),
-            }],
+            fields: vec![
+                ConfigField {
+                    key: KEY_PER_CORE.to_string(),
+                    label: "各核心明细".to_string(),
+                    kind: FieldKind::Bool,
+                    default: ConfigValue::Bool(false),
+                    help: Some("是否额外推送各核心使用率（sys.cpu.cores，JSON 数组）".to_string()),
+                },
+                super::high_threshold_field(),
+            ],
         }
     }
 
     fn start(&mut self, ctx: AdapterContext) -> Result<(), AdapterError> {
         let per_core = Self::resolve_per_core(&ctx.config)?;
+        // 校验高占用阈值（M2.3）：非法配置在启动即拒绝（一致性测试要求）。
+        super::resolve_high_threshold(&ctx.config)?;
         self.status = AdapterStatus::Running;
 
         let sink = ctx.sink.clone();
@@ -197,15 +204,19 @@ mod tests {
     fn conformance() {
         let mut adapter = SysCpu::new();
         let valid = HashMap::new();
-        let mut invalid = HashMap::new();
-        invalid.insert(KEY_PER_CORE.to_string(), ConfigValue::Text("x".into()));
+        // 非法 high_threshold 也应在启动即拒绝（M2.3）；per_core 非法由 resolve 单测覆盖
+        let mut invalid_threshold = HashMap::new();
+        invalid_threshold.insert(
+            crate::sys::KEY_HIGH_THRESHOLD.to_string(),
+            ConfigValue::Number(150.0),
+        );
         let series = SeriesId::new(&adapter.meta().id, METRIC_USAGE);
         pano_core::test_harness::run_all(
             &mut adapter,
             &[series],
             valid,
             Duration::from_millis(200),
-            invalid,
+            invalid_threshold,
         )
         .expect("一致性测试失败");
     }

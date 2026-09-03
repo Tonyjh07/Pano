@@ -1,17 +1,23 @@
-//! 系统监控适配器：`sys.disk` —— 磁盘用量。
+//! 系统监控适配器：`sys.disk` —— 磁盘用量与活动率。
 //!
 //! - series：
 //!   - `sys.disk.used_percent`（Number，%）
 //!   - `sys.disk.used_bytes`（Number）
 //!   - `sys.disk.total_bytes`（Number）
+//!   - `sys.disk.active_percent`（Number，%，M2.3）：**磁盘活动率**（近似忙碌
+//!     时间）——滑动窗口最近 10 个采样点中「有读写 IO」的比例 × 100。
 //! - 自定义配置：
 //!   - `device`（Text，可选）—— 磁盘名 / 挂载点子串过滤（大小写不敏感）；
-//!     缺省统计全部磁盘。
+//!     缺省统计全部磁盘；
+//!   - `high_threshold`（Number，默认 80，域 0..=100，M2.3）—— 高占用阈值
+//!     （仪表盘指示灯判定用；适配器自身不使用，仅作配置暴露）。
 //! - 能力：`SystemInfo` + `TimeSeries`。
 //!
-//! 用量为聚合值（used = Σ(total - available)，对匹配设备求和）。
+//! 用量为聚合值（used = Σ(total - available)，对匹配设备求和）。活动判定基于
+//! sysinfo `DiskUsage.read_bytes + written_bytes`（自上次刷新的增量）：该采样点
+//! 增量 > 0 记为活跃，写入固定长度滑动窗口求比例。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use pano_core::adapter::{
     Adapter, AdapterContext, AdapterError, AdapterMeta, AdapterStatus, ConfigField, ConfigSchema,
@@ -19,12 +25,13 @@ use pano_core::adapter::{
 };
 use pano_core::capability::Capability;
 
-use super::percent;
+use super::{ACTIVITY_WINDOW, percent};
 
 const ID: &str = "sys.disk";
 const METRIC_USED_PERCENT: &str = "used_percent";
 const METRIC_USED_BYTES: &str = "used_bytes";
 const METRIC_TOTAL_BYTES: &str = "total_bytes";
+const METRIC_ACTIVE_PERCENT: &str = "active_percent";
 const KEY_DEVICE: &str = "device";
 
 /// `sys.disk` 适配器：每采样周期推送磁盘用量（可 `device` 过滤）。
@@ -88,23 +95,29 @@ impl Adapter for SysDisk {
             SeriesId::new(&id, METRIC_USED_PERCENT),
             SeriesId::new(&id, METRIC_USED_BYTES),
             SeriesId::new(&id, METRIC_TOTAL_BYTES),
+            SeriesId::new(&id, METRIC_ACTIVE_PERCENT),
         ]
     }
 
     fn config_schema(&self) -> ConfigSchema {
         ConfigSchema {
-            fields: vec![ConfigField {
-                key: KEY_DEVICE.to_string(),
-                label: "设备过滤".to_string(),
-                kind: FieldKind::Text,
-                default: ConfigValue::Text(String::new()),
-                help: Some("仅统计磁盘名 / 挂载点包含该子串的设备（留空 = 全部）".to_string()),
-            }],
+            fields: vec![
+                ConfigField {
+                    key: KEY_DEVICE.to_string(),
+                    label: "设备过滤".to_string(),
+                    kind: FieldKind::Text,
+                    default: ConfigValue::Text(String::new()),
+                    help: Some("仅统计磁盘名 / 挂载点包含该子串的设备（留空 = 全部）".to_string()),
+                },
+                super::high_threshold_field(),
+            ],
         }
     }
 
     fn start(&mut self, ctx: AdapterContext) -> Result<(), AdapterError> {
         let device = Self::resolve_device(&ctx.config)?;
+        // 校验高占用阈值（M2.3）：非法配置在启动即拒绝（一致性测试要求）。
+        super::resolve_high_threshold(&ctx.config)?;
         self.status = AdapterStatus::Running;
 
         let sink = ctx.sink.clone();
@@ -112,6 +125,7 @@ impl Adapter for SysDisk {
         let series_used_percent = SeriesId::new(&self.meta().id, METRIC_USED_PERCENT);
         let series_used_bytes = SeriesId::new(&self.meta().id, METRIC_USED_BYTES);
         let series_total_bytes = SeriesId::new(&self.meta().id, METRIC_TOTAL_BYTES);
+        let series_active_percent = SeriesId::new(&self.meta().id, METRIC_ACTIVE_PERCENT);
         let filter = device.map(|d| d.to_lowercase());
         self.runtime = Some(ctx.runtime.clone());
         // 预热：首次刷新较慢，提前执行避免污染采样节奏（见 roadmap §M2）。
@@ -121,6 +135,8 @@ impl Adapter for SysDisk {
             let mut ticker = tokio::time::interval(sampling);
             // 慢周期（如某个刷新意外超时）不补发：Skip 而非默认 Burst（见 roadmap §M2）。
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            // 磁盘活动率滑动窗口（M2.3）：活跃比例 = 窗口内活跃采样点 / 已填点数
+            let mut activity: VecDeque<u8> = VecDeque::with_capacity(ACTIVITY_WINDOW);
             loop {
                 ticker.tick().await;
                 // sysinfo 刷新为短阻塞（毫秒级）。直接同步调用：不用 block_in_place，
@@ -128,6 +144,7 @@ impl Adapter for SysDisk {
                 disks.refresh(true);
                 let mut used = 0u64;
                 let mut total = 0u64;
+                let mut io_delta = 0u64;
                 for disk in disks.list() {
                     if let Some(filter) = &filter {
                         let name = disk.name().to_string_lossy().to_lowercase();
@@ -138,7 +155,12 @@ impl Adapter for SysDisk {
                     }
                     total += disk.total_space();
                     used += disk.total_space().saturating_sub(disk.available_space());
+                    // 活动判定：自上次刷新的读写增量（DiskUsage.read_bytes/written_bytes）
+                    let usage = disk.usage();
+                    io_delta = io_delta.saturating_add(usage.read_bytes);
+                    io_delta = io_delta.saturating_add(usage.written_bytes);
                 }
+                let active_percent = super::activity_percent(&mut activity, io_delta > 0);
                 let timestamp = pano_core::adapter::now();
                 sink.push(
                     series_used_percent.clone(),
@@ -161,11 +183,19 @@ impl Adapter for SysDisk {
                         value: SampleValue::Number(total as f64),
                     },
                 );
+                sink.push(
+                    series_active_percent.clone(),
+                    Sample {
+                        timestamp,
+                        value: SampleValue::Number(active_percent),
+                    },
+                );
                 tracing::trace!(
                     target: "pano::adapters::sys_disk",
                     used_percent = percent(used, total),
                     used_bytes = used,
                     total_bytes = total,
+                    active_percent,
                     "推送磁盘样本"
                 );
             }
@@ -229,9 +259,13 @@ mod tests {
     fn conformance() {
         let mut adapter = SysDisk::new();
         let valid = HashMap::new();
+        // 非法 high_threshold 也应在启动即拒绝（M2.3）
         let mut invalid = HashMap::new();
-        invalid.insert(KEY_DEVICE.to_string(), ConfigValue::Number(1.0));
-        let series = SeriesId::new(&adapter.meta().id, METRIC_USED_PERCENT);
+        invalid.insert(
+            crate::sys::KEY_HIGH_THRESHOLD.to_string(),
+            ConfigValue::Number(150.0),
+        );
+        let series = SeriesId::new(&adapter.meta().id, METRIC_ACTIVE_PERCENT);
         pano_core::test_harness::run_all(
             &mut adapter,
             &[series],

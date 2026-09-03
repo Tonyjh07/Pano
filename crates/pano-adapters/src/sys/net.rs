@@ -1,10 +1,15 @@
-//! 系统监控适配器：`sys.net` —— 网络收发速率（速率图，字节/秒）。
+//! 系统监控适配器：`sys.net` —— 网络收发速率与链路利用率。
 //!
 //! - series：
 //!   - `sys.net.recv_bps`（Number，字节/秒）：下载速率；
-//!   - `sys.net.sent_bps`（Number，字节/秒）：上传速率。
+//!   - `sys.net.sent_bps`（Number，字节/秒）：上传速率；
+//!   - `sys.net.utilization`（Number，%，M2.3）：**链路利用率** =（recv_bps +
+//!     sent_bps）/（参考带宽）× 100，钳制 0..=100。
 //! - 自定义配置：
-//!   - `interface`（Text，可选）—— 网卡名子串过滤（大小写不敏感）；缺省聚合全部网卡。
+//!   - `interface`（Text，可选）—— 网卡名子串过滤（大小写不敏感）；缺省聚合全部网卡；
+//!   - `link_mbps`（Number，默认 1000 = 1 Gbps，M2.3）—— 参考链路带宽，用于折算利用率；
+//!   - `high_threshold`（Number，默认 80，域 0..=100，M2.3）—— 高占用阈值
+//!     （仪表盘指示灯判定用；适配器自身不使用，仅作配置暴露）。
 //! - 能力：`SystemInfo` + `TimeSeries`。
 //!
 //! 速率为相邻两次刷新间累计字节差 / 经过时间；start 预热捕获累计基线、
@@ -22,7 +27,10 @@ use pano_core::capability::Capability;
 const ID: &str = "sys.net";
 const METRIC_RECV: &str = "recv_bps";
 const METRIC_SENT: &str = "sent_bps";
+const METRIC_UTILIZATION: &str = "utilization";
 const KEY_INTERFACE: &str = "interface";
+const KEY_LINK_MBPS: &str = "link_mbps";
+const DEFAULT_LINK_MBPS: f64 = 1000.0;
 
 /// `sys.net` 适配器：每采样周期推送网络收发速率（可 `interface` 过滤）。
 pub struct SysNet {
@@ -54,6 +62,17 @@ impl SysNet {
             ))),
         }
     }
+
+    /// 解析 `link_mbps`（参考带宽，> 0）；缺省 1000，非法返回 [`AdapterError::Config`]。
+    fn resolve_link_mbps(config: &HashMap<String, ConfigValue>) -> Result<f64, AdapterError> {
+        match config.get(KEY_LINK_MBPS) {
+            None => Ok(DEFAULT_LINK_MBPS),
+            Some(ConfigValue::Number(n)) if n.is_finite() && *n > 0.0 => Ok(*n),
+            Some(other) => Err(AdapterError::Config(format!(
+                "link_mbps 必须为 > 0 的数值，实际 {other:?}"
+            ))),
+        }
+    }
 }
 
 impl Default for SysNet {
@@ -67,7 +86,7 @@ impl Adapter for SysNet {
         AdapterMeta {
             id: pano_core::adapter::AdapterId::new(ID),
             name: "网络速率".to_string(),
-            description: "网络收发速率（字节/秒，可按网卡过滤）".to_string(),
+            description: "网络收发速率与链路利用率（字节/秒 + 利用率 %，可按网卡过滤）".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
@@ -84,29 +103,47 @@ impl Adapter for SysNet {
         vec![
             SeriesId::new(&id, METRIC_RECV),
             SeriesId::new(&id, METRIC_SENT),
+            SeriesId::new(&id, METRIC_UTILIZATION),
         ]
     }
 
     fn config_schema(&self) -> ConfigSchema {
         ConfigSchema {
-            fields: vec![ConfigField {
-                key: KEY_INTERFACE.to_string(),
-                label: "网卡过滤".to_string(),
-                kind: FieldKind::Text,
-                default: ConfigValue::Text(String::new()),
-                help: Some("仅统计网卡名包含该子串的接口（留空 = 聚合全部）".to_string()),
-            }],
+            fields: vec![
+                ConfigField {
+                    key: KEY_INTERFACE.to_string(),
+                    label: "网卡过滤".to_string(),
+                    kind: FieldKind::Text,
+                    default: ConfigValue::Text(String::new()),
+                    help: Some("仅统计网卡名包含该子串的接口（留空 = 聚合全部）".to_string()),
+                },
+                ConfigField {
+                    key: KEY_LINK_MBPS.to_string(),
+                    label: "参考带宽 (Mbps)".to_string(),
+                    kind: FieldKind::Number,
+                    default: ConfigValue::Number(DEFAULT_LINK_MBPS),
+                    help: Some(
+                        "链路参考带宽（Mbps），用于折算 sys.net.utilization（利用率 %）"
+                            .to_string(),
+                    ),
+                },
+                super::high_threshold_field(),
+            ],
         }
     }
 
     fn start(&mut self, ctx: AdapterContext) -> Result<(), AdapterError> {
         let interface = Self::resolve_interface(&ctx.config)?;
+        let link_mbps = Self::resolve_link_mbps(&ctx.config)?;
+        // 校验高占用阈值（M2.3）：非法配置在启动即拒绝（一致性测试要求）。
+        super::resolve_high_threshold(&ctx.config)?;
         self.status = AdapterStatus::Running;
 
         let sink = ctx.sink.clone();
         let sampling = ctx.sampling;
         let series_recv = SeriesId::new(&self.meta().id, METRIC_RECV);
         let series_sent = SeriesId::new(&self.meta().id, METRIC_SENT);
+        let series_utilization = SeriesId::new(&self.meta().id, METRIC_UTILIZATION);
         let filter = interface.map(|i| i.to_lowercase());
         self.runtime = Some(ctx.runtime.clone());
         // 预热：首次刷新较慢，提前执行避免污染采样节奏（见 roadmap §M2）。
@@ -134,6 +171,7 @@ impl Adapter for SysNet {
                 if !first && elapsed > 0.0 {
                     let recv_bps = recv.saturating_sub(prev_recv) as f64 / elapsed;
                     let sent_bps = sent.saturating_sub(prev_sent) as f64 / elapsed;
+                    let utilization = super::link_utilization(recv_bps, sent_bps, link_mbps);
                     let timestamp = pano_core::adapter::now();
                     sink.push(
                         series_recv.clone(),
@@ -149,10 +187,18 @@ impl Adapter for SysNet {
                             value: SampleValue::Number(sent_bps),
                         },
                     );
+                    sink.push(
+                        series_utilization.clone(),
+                        Sample {
+                            timestamp,
+                            value: SampleValue::Number(utilization),
+                        },
+                    );
                     tracing::trace!(
                         target: "pano::adapters::sys_net",
                         recv_bps,
                         sent_bps,
+                        utilization,
                         "推送网络样本"
                     );
                 }
@@ -235,11 +281,44 @@ mod tests {
     }
 
     #[test]
+    fn resolve_link_mbps_default_and_valid() {
+        let empty = HashMap::new();
+        assert_eq!(SysNet::resolve_link_mbps(&empty).unwrap(), 1000.0);
+
+        let mut cfg = HashMap::new();
+        cfg.insert(KEY_LINK_MBPS.to_string(), ConfigValue::Number(100.0));
+        assert_eq!(SysNet::resolve_link_mbps(&cfg).unwrap(), 100.0);
+    }
+
+    #[test]
+    fn resolve_link_mbps_rejects_invalid() {
+        // 非正数 / 非数值
+        for bad in [0.0, -10.0, f64::NAN] {
+            let mut cfg = HashMap::new();
+            cfg.insert(KEY_LINK_MBPS.to_string(), ConfigValue::Number(bad));
+            assert!(matches!(
+                SysNet::resolve_link_mbps(&cfg),
+                Err(AdapterError::Config(_))
+            ));
+        }
+        let mut cfg = HashMap::new();
+        cfg.insert(KEY_LINK_MBPS.to_string(), ConfigValue::Text("x".into()));
+        assert!(matches!(
+            SysNet::resolve_link_mbps(&cfg),
+            Err(AdapterError::Config(_))
+        ));
+    }
+
+    #[test]
     fn conformance() {
         let mut adapter = SysNet::new();
         let valid = HashMap::new();
+        // 非法 high_threshold 也应在启动即拒绝（M2.3）
         let mut invalid = HashMap::new();
-        invalid.insert(KEY_INTERFACE.to_string(), ConfigValue::Bool(true));
+        invalid.insert(
+            crate::sys::KEY_HIGH_THRESHOLD.to_string(),
+            ConfigValue::Number(101.0),
+        );
         let series = SeriesId::new(&adapter.meta().id, METRIC_RECV);
         pano_core::test_harness::run_all(
             &mut adapter,
