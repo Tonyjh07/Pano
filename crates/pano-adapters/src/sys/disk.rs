@@ -4,20 +4,20 @@
 //!   - `sys.disk.used_percent`（Number，%）
 //!   - `sys.disk.used_bytes`（Number）
 //!   - `sys.disk.total_bytes`（Number）
-//!   - `sys.disk.active_percent`（Number，%，M2.3）：**磁盘活动率**（近似忙碌
-//!     时间）——滑动窗口最近 10 个采样点中「有读写 IO」的比例 × 100。
+//!   - `sys.disk.active_percent`（Number，%，M2.3）：**磁盘活动率 = 当前最忙磁盘
+//!     的真实忙碌时间 %**（0..=100）。Windows 用 PDH `\PhysicalDisk(*)\% Disk Time`
+//!     逐盘采集取最大（见 `disk_busy` 模块）；Linux / macOS 暂未实现（不产出）；
+//!   - `sys.disk.busiest_disk`（Text，M2.3.1）：最忙盘盘符（如 `C:`），供 UI 显示。
 //! - 自定义配置：
 //!   - `device`（Text，可选）—— 磁盘名 / 挂载点子串过滤（大小写不敏感）；
-//!     缺省统计全部磁盘；
+//!     缺省统计全部磁盘；**仅作用于容量系列**，忙碌时间统计系统全部物理磁盘；
 //!   - `high_threshold`（Number，默认 80，域 0..=100，M2.3）—— 高占用阈值
 //!     （仪表盘指示灯判定用；适配器自身不使用，仅作配置暴露）。
 //! - 能力：`SystemInfo` + `TimeSeries`。
 //!
-//! 用量为聚合值（used = Σ(total - available)，对匹配设备求和）。活动判定基于
-//! sysinfo `DiskUsage.read_bytes + written_bytes`（自上次刷新的增量）：该采样点
-//! 增量 > 0 记为活跃，写入固定长度滑动窗口求比例。
+//! 用量为聚合值（used = Σ(total - available)，对匹配设备求和）。
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use pano_core::adapter::{
     Adapter, AdapterContext, AdapterError, AdapterMeta, AdapterStatus, ConfigField, ConfigSchema,
@@ -25,16 +25,17 @@ use pano_core::adapter::{
 };
 use pano_core::capability::Capability;
 
-use super::{ACTIVITY_WINDOW, percent};
+use super::{disk_busy, percent};
 
 const ID: &str = "sys.disk";
 const METRIC_USED_PERCENT: &str = "used_percent";
 const METRIC_USED_BYTES: &str = "used_bytes";
 const METRIC_TOTAL_BYTES: &str = "total_bytes";
 const METRIC_ACTIVE_PERCENT: &str = "active_percent";
+const METRIC_BUSIEST_DISK: &str = "busiest_disk";
 const KEY_DEVICE: &str = "device";
 
-/// `sys.disk` 适配器：每采样周期推送磁盘用量（可 `device` 过滤）。
+/// `sys.disk` 适配器：每采样周期推送磁盘用量（可 `device` 过滤）+ 最忙盘忙碌时间。
 pub struct SysDisk {
     status: AdapterStatus,
     task: Option<tokio::task::JoinHandle<()>>,
@@ -77,7 +78,8 @@ impl Adapter for SysDisk {
         AdapterMeta {
             id: pano_core::adapter::AdapterId::new(ID),
             name: "磁盘使用率".to_string(),
-            description: "系统磁盘用量（已用/总量/使用率，可按设备过滤）".to_string(),
+            description: "系统磁盘用量与活动率（已用/总量 + 最忙盘忙碌时间，可按设备过滤）"
+                .to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
@@ -96,6 +98,7 @@ impl Adapter for SysDisk {
             SeriesId::new(&id, METRIC_USED_BYTES),
             SeriesId::new(&id, METRIC_TOTAL_BYTES),
             SeriesId::new(&id, METRIC_ACTIVE_PERCENT),
+            SeriesId::new(&id, METRIC_BUSIEST_DISK),
         ]
     }
 
@@ -126,17 +129,28 @@ impl Adapter for SysDisk {
         let series_used_bytes = SeriesId::new(&self.meta().id, METRIC_USED_BYTES);
         let series_total_bytes = SeriesId::new(&self.meta().id, METRIC_TOTAL_BYTES);
         let series_active_percent = SeriesId::new(&self.meta().id, METRIC_ACTIVE_PERCENT);
+        let series_busiest_disk = SeriesId::new(&self.meta().id, METRIC_BUSIEST_DISK);
         let filter = device.map(|d| d.to_lowercase());
         self.runtime = Some(ctx.runtime.clone());
         // 预热：首次刷新较慢，提前执行避免污染采样节奏（见 roadmap §M2）。
         let mut disks = sysinfo::Disks::new_with_refreshed_list();
         disks.refresh(true);
+        // 磁盘忙碌时间采样器（M2.3.1，Windows 先行）：PDH %DiskTime。
+        // 其他平台 / PDH 初始化失败 → None，跳过 active_percent / busiest_disk。
+        let mut busy = match disk_busy::DiskBusy::new() {
+            Ok(b) => Some(b),
+            Err(e) => {
+                tracing::warn!(
+                    target: "pano::adapters::sys_disk",
+                    "磁盘忙碌时间采样器不可用：{e}（跳过 active_percent / busiest_disk）"
+                );
+                None
+            }
+        };
         self.task = Some(ctx.runtime.spawn(async move {
             let mut ticker = tokio::time::interval(sampling);
             // 慢周期（如某个刷新意外超时）不补发：Skip 而非默认 Burst（见 roadmap §M2）。
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // 磁盘活动率滑动窗口（M2.3）：活跃比例 = 窗口内活跃采样点 / 已填点数
-            let mut activity: VecDeque<u8> = VecDeque::with_capacity(ACTIVITY_WINDOW);
             loop {
                 ticker.tick().await;
                 // sysinfo 刷新为短阻塞（毫秒级）。直接同步调用：不用 block_in_place，
@@ -144,7 +158,6 @@ impl Adapter for SysDisk {
                 disks.refresh(true);
                 let mut used = 0u64;
                 let mut total = 0u64;
-                let mut io_delta = 0u64;
                 for disk in disks.list() {
                     if let Some(filter) = &filter {
                         let name = disk.name().to_string_lossy().to_lowercase();
@@ -155,12 +168,7 @@ impl Adapter for SysDisk {
                     }
                     total += disk.total_space();
                     used += disk.total_space().saturating_sub(disk.available_space());
-                    // 活动判定：自上次刷新的读写增量（DiskUsage.read_bytes/written_bytes）
-                    let usage = disk.usage();
-                    io_delta = io_delta.saturating_add(usage.read_bytes);
-                    io_delta = io_delta.saturating_add(usage.written_bytes);
                 }
-                let active_percent = super::activity_percent(&mut activity, io_delta > 0);
                 let timestamp = pano_core::adapter::now();
                 sink.push(
                     series_used_percent.clone(),
@@ -183,19 +191,28 @@ impl Adapter for SysDisk {
                         value: SampleValue::Number(total as f64),
                     },
                 );
-                sink.push(
-                    series_active_percent.clone(),
-                    Sample {
-                        timestamp,
-                        value: SampleValue::Number(active_percent),
-                    },
-                );
+                // 磁盘活动率（M2.3.1）：最忙盘忙碌时间 % + 盘符（Windows 先行）
+                if let Some((busiest_name, busy_pct)) = busy.as_mut().and_then(|b| b.sample()) {
+                    sink.push(
+                        series_active_percent.clone(),
+                        Sample {
+                            timestamp,
+                            value: SampleValue::Number(busy_pct),
+                        },
+                    );
+                    sink.push(
+                        series_busiest_disk.clone(),
+                        Sample {
+                            timestamp,
+                            value: SampleValue::Text(busiest_name),
+                        },
+                    );
+                }
                 tracing::trace!(
                     target: "pano::adapters::sys_disk",
                     used_percent = percent(used, total),
                     used_bytes = used,
                     total_bytes = total,
-                    active_percent,
                     "推送磁盘样本"
                 );
             }
@@ -265,7 +282,8 @@ mod tests {
             crate::sys::KEY_HIGH_THRESHOLD.to_string(),
             ConfigValue::Number(150.0),
         );
-        let series = SeriesId::new(&adapter.meta().id, METRIC_ACTIVE_PERCENT);
+        // 主 series 用 used_percent：跨平台始终产出（active_percent 仅 Windows 产出）
+        let series = SeriesId::new(&adapter.meta().id, METRIC_USED_PERCENT);
         pano_core::test_harness::run_all(
             &mut adapter,
             &[series],

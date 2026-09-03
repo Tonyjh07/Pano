@@ -7,7 +7,7 @@
 //! | --- | --- | --- |
 //! | `sys.cpu` | `usage`（%）、`cores`（JSON，可选） | CPU 全局平均使用率 / 各核心明细 |
 //! | `sys.mem` | `used_percent`（%）、`used_bytes`、`total_bytes`、`swap_percent`（可选） | 内存用量 |
-//! | `sys.disk` | `used_percent`（%）、`used_bytes`、`total_bytes`、`active_percent`（M2.3，%） | 磁盘用量 / 磁盘活动率（近似忙碌时间） |
+//! | `sys.disk` | `used_percent`（%）、`used_bytes`、`total_bytes`、`active_percent`（M2.3，%）、`busiest_disk`（M2.3.1，文本） | 磁盘用量 / 最忙盘真实忙碌时间（Windows PDH 先行） |
 //! | `sys.net` | `recv_bps`、`sent_bps`（字节/秒）、`utilization`（M2.3，%） | 网络收发速率 / 链路利用率 |
 //!
 //! 能力：`SystemInfo` + `TimeSeries`；本地采集几乎不会失败（无退避重试路径）。
@@ -21,7 +21,7 @@
 //! 关闭时的竞态 panic，见 roadmap §M2）；首次刷新冷启动较慢（约 1s），由各
 //! 适配器在 `start` 中**预热**执行。
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use pano_core::adapter::{AdapterError, ConfigField, ConfigValue, FieldKind};
 
@@ -33,6 +33,9 @@ pub mod mem;
 
 #[cfg(feature = "adapter-sys-disk")]
 pub mod disk;
+
+#[cfg(feature = "adapter-sys-disk")]
+pub(crate) mod disk_busy;
 
 #[cfg(feature = "adapter-sys-net")]
 pub mod net;
@@ -71,20 +74,6 @@ pub fn high_threshold_field() -> ConfigField {
         default: ConfigValue::Number(DEFAULT_HIGH_THRESHOLD),
         help: Some("占用率超过该阈值（%，0..=100）时，资源仪表盘指示灯亮红".to_string()),
     }
-}
-
-/// 磁盘活动率滑动窗口长度（采样点个数；如 1s 采样 ≈ 最近 10 秒）。
-pub const ACTIVITY_WINDOW: usize = 10;
-
-/// 磁盘活动率：把「本采样点是否有读写 IO」推入固定长度滑动窗口，
-/// 返回窗口内活跃采样点比例 × 100（窗口未满时按当前已填点数计，平滑起步）。
-pub fn activity_percent(window: &mut VecDeque<u8>, active: bool) -> f64 {
-    window.push_back(active as u8);
-    if window.len() > ACTIVITY_WINDOW {
-        window.pop_front();
-    }
-    let active_count: usize = window.iter().map(|&b| b as usize).sum();
-    active_count as f64 / window.len() as f64 * 100.0
 }
 
 /// 链路利用率（%）：总速率（recv + sent，字节/秒）/ 参考带宽 × 100，钳制 0..=100。
@@ -154,25 +143,6 @@ mod tests {
             resolve_high_threshold(&cfg),
             Err(AdapterError::Config(_))
         ));
-    }
-
-    #[test]
-    fn activity_percent_sliding_window() {
-        let mut w = VecDeque::new();
-        // 起步：窗口未满，按已填计数（3 活跃 / 4 点 = 75%）
-        assert_eq!(activity_percent(&mut w, true), 100.0);
-        assert_eq!(activity_percent(&mut w, false), 50.0);
-        assert_eq!(activity_percent(&mut w, true), 2.0 / 3.0 * 100.0);
-        assert_eq!(activity_percent(&mut w, true), 75.0);
-        // 窗口满（10 点）：活跃比例按固定窗口计
-        for _ in 0..6 {
-            activity_percent(&mut w, false);
-        }
-        assert_eq!(w.len(), ACTIVITY_WINDOW);
-        // 窗口 = [1,0,1,1,0,0,0,0,0,0]（3 活跃）：弹出一个活跃点 → 2/10
-        assert_eq!(activity_percent(&mut w, false), 20.0);
-        // 窗口 = [0,1,1,0,0,0,0,0,0,0]（2 活跃）：弹出 0 加入 1 → 3/10
-        assert_eq!(activity_percent(&mut w, true), 30.0);
     }
 
     #[test]

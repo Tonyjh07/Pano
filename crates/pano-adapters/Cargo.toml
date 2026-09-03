@@ -16,7 +16,7 @@ default = [
 ]
 adapter-sys-cpu = ["dep:sysinfo", "dep:serde_json"]
 adapter-sys-mem = ["dep:sysinfo"]
-adapter-sys-disk = ["dep:sysinfo"]
+adapter-sys-disk = ["dep:sysinfo", "dep:windows-sys"]
 adapter-sys-net = ["dep:sysinfo"]
 adapter-example-counter = []
 adapter-example-sine = []
@@ -34,3 +34,9 @@ sysinfo = { version = "0.39", default-features = false, features = ["system", "d
 reqwest = { version = "0.12", optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
 futures-util = { version = "0.3", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# Windows 磁盘忙碌时间（M2.3.1）：PDH %DiskTime（复用 Tauri 依赖树中已有的
+# windows-sys；由 adapter-sys-disk feature 门控，仅 Windows + 该 feature 时编译）
+windows-sys = { version = "0.61", features = ["Win32_System_Performance", "Win32_Foundation"], optional = true }
+
