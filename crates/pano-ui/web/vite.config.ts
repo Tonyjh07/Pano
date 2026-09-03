@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
@@ -25,5 +26,17 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    // Svelte 5 根导出在 Node（vitest）默认解析到 server 版（index-server.js），
+    // 其中 `mount` 不可用（lifecycle_function_unavailable）。测试环境下把根
+    // `svelte` 别名到 client 版（用绝对路径避开 package exports 的导出限制），
+    // 使 @testing-library/svelte 的 render 能真正挂载组件。
+    alias: [
+      {
+        find: /^svelte$/,
+        replacement: fileURLToPath(
+          new URL("./node_modules/svelte/src/index-client.js", import.meta.url),
+        ),
+      },
+    ],
   },
 });
