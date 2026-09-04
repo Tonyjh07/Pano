@@ -52,4 +52,70 @@ describe("Gauge", () => {
     });
     expect(container.querySelector(".detail")).toBeNull();
   });
+
+  it("draws a 240° arc from -120° to +120° (12 o'clock zero, clockwise, M2.4)", () => {
+    const { container } = render(Gauge, {
+      props: { value: 0, threshold: 80, label: "x" },
+    });
+    const d = container.querySelector(".track")!.getAttribute("d")!;
+    // 弧路径：M <start> A <R> <R> 0 <large-arc=1> <sweep=1> <end>
+    expect(d).toMatch(/^M [\d.]+ [\d.]+ A [\d.]+ [\d.]+ 0 1 1 [\d.]+ [\d.]+$/);
+    // 起点 = 左下（x < cx）、终点 = 右下（x > cx），对称于 12 点轴（y 相等）
+    const m = d.match(/^M ([\d.]+) ([\d.]+) A [\d.]+ [\d.]+ 0 1 1 ([\d.]+) ([\d.]+)$/);
+    expect(m).not.toBeNull();
+    const x0 = parseFloat(m![1]);
+    const y0 = parseFloat(m![2]);
+    const x1 = parseFloat(m![3]);
+    const y1 = parseFloat(m![4]);
+    expect(x0).toBeLessThan(x1);
+    expect(y0).toBeCloseTo(y1, 5);
+  });
+
+  it("draws the redzone arc from the threshold toward 100", () => {
+    const { container } = render(Gauge, {
+      props: { value: 10, threshold: 80, label: "x" },
+    });
+    const red = container.querySelector(".redzone");
+    expect(red).not.toBeNull();
+    expect(red!.getAttribute("d")).toContain("A");
+  });
+
+  it("uses a short arc (large-arc=0) for a narrow redzone (M2.4)", () => {
+    // thr=80 → 红区仅 48°（<180°）→ large-arc 必须为 0，否则会画成反向大弧
+    const { container } = render(Gauge, {
+      props: { value: 10, threshold: 80, label: "x" },
+    });
+    const d = container.querySelector(".redzone")!.getAttribute("d")!;
+    expect(d).toMatch(/A [\d.]+ [\d.]+ 0 0 1 [\d.]+ [\d.]+$/);
+  });
+
+  it("uses a large arc (large-arc=1) for a wide redzone (M2.4)", () => {
+    // thr=0 → 红区覆盖整段 240°（>180°）→ large-arc=1
+    const { container } = render(Gauge, {
+      props: { value: 10, threshold: 0, label: "x" },
+    });
+    const d = container.querySelector(".redzone")!.getAttribute("d")!;
+    expect(d).toMatch(/A [\d.]+ [\d.]+ 0 1 1 [\d.]+ [\d.]+$/);
+  });
+
+  it("keeps numeric labels inside the viewBox for all sizes (M2.4 B2 回归)", () => {
+    // 标签在刻度内圈（R·0.82）：任何 size（含紧凑 75 / 下限 48）都不越出 viewBox
+    for (const size of [240, 75, 48]) {
+      const { container, unmount } = render(Gauge, {
+        props: { value: 50, threshold: 80, label: "x", size },
+      });
+      const H = size * 0.66;
+      const labels = container.querySelectorAll(".tick-label");
+      expect(labels.length).toBe(5);
+      labels.forEach((el) => {
+        const x = parseFloat(el.getAttribute("x")!);
+        const y = parseFloat(el.getAttribute("y")!);
+        expect(x).toBeGreaterThanOrEqual(0);
+        expect(x).toBeLessThanOrEqual(size);
+        expect(y).toBeGreaterThanOrEqual(0);
+        expect(y).toBeLessThanOrEqual(H);
+      });
+      unmount();
+    }
+  });
 });

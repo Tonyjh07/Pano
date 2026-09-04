@@ -157,6 +157,7 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                     let _ = window.hide();
                 }
                 // 移动 / 缩放 → 更新布局记忆（内存；写回在退出 / 配置保存时）
+                // M2.4：保留窗口级无边框覆盖（layout_with_geometry）。
                 tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
                     if let Ok(handle) = state.window_service.handle(window.label())
                         && let Ok(geometry) = handle.geometry()
@@ -165,9 +166,11 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                             .window_layouts()
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
+                        // M2.4：保留窗口级无边框覆盖（layout_with_geometry）
+                        let existing = guard.get(window.label()).cloned();
                         guard.insert(
                             window.label().to_string(),
-                            persist::layout_from_geometry(&geometry),
+                            persist::layout_with_geometry(existing.as_ref(), &geometry),
                         );
                     }
                 }
@@ -210,6 +213,9 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                 )
                 .map_err(|e| anyhow::anyhow!("创建管理窗口失败：{e}"))?;
             // 管理窗口计入运行时注册表（窗口管理页 / 托盘「窗口列表」，不可销毁）
+            if let Some(layout) = &manager_layout {
+                remember_layout(&layouts, "manager", layout);
+            }
             {
                 let state = app.state::<AppState>();
                 let mut windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
@@ -263,6 +269,10 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                         .map_err(|e| anyhow::anyhow!("创建组件窗口 {} 失败：{e}", component.id))?;
                     {
                         let state = app.state::<AppState>();
+                        // M2.4 B1：预填布局记忆（保留窗口级覆盖不被几何刷新冲刷）
+                        if let Some(layout) = &layout {
+                            remember_layout(state.window_layouts(), &component.id, layout);
+                        }
                         let mut windows =
                             state.windows().lock().unwrap_or_else(|e| e.into_inner());
                         windows.insert(
@@ -324,6 +334,10 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
                         .map_err(|e| anyhow::anyhow!("恢复监控窗口 {id} 失败：{e}"))?;
                     {
                         let state = app.state::<AppState>();
+                        // M2.4 B1：预填布局记忆（保留窗口级覆盖不被几何刷新冲刷）
+                        if let Some(layout) = &layout {
+                            remember_layout(state.window_layouts(), id, layout);
+                        }
                         let mut windows =
                             state.windows().lock().unwrap_or_else(|e| e.into_inner());
                         windows.insert(id.clone(), WindowEntry { title, component });
@@ -356,6 +370,23 @@ fn run_gui(lifecycle: Lifecycle, config_path: PathBuf) -> Result<()> {
     }
     tracing::info!(target: "pano::app", "Pano 已退出");
     Ok(())
+}
+
+/// 建窗后把配置布局预填进运行时布局记忆（M2.4，B1 修复）。
+///
+/// 使「保留窗口级覆盖」（`persist::layout_with_geometry` 的 `existing`）重启后
+/// 恒有值——否则内存布局记忆以空表启动，重启后首次几何刷新（移动 / 缩放 /
+/// 退出）会以 `existing=None` 生成 `decorations: None`，把 `[window.<id>].
+/// decorations` 覆盖从配置中冲刷掉（手动设置的无边框丢失，见审查 B1）。
+fn remember_layout(
+    layouts: &Arc<Mutex<HashMap<String, WindowLayout>>>,
+    id: &str,
+    layout: &WindowLayout,
+) {
+    layouts
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id.to_string(), layout.clone());
 }
 
 /// 配置持久化回调：段级合并窗口集合（注册表：组件绑定 + 标题）与布局 → 序列化 → 写回文件。
@@ -475,11 +506,16 @@ fn build_tray(
                     if let Ok(handle) = state.window_service.handle(&label)
                         && let Ok(geometry) = handle.geometry()
                     {
-                        state
+                        let mut layouts = state
                             .window_layouts()
                             .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .insert(label.clone(), persist::layout_from_geometry(&geometry));
+                            .unwrap_or_else(|e| e.into_inner());
+                        // M2.4：保留窗口级无边框覆盖（layout_with_geometry）
+                        let existing = layouts.get(&label).cloned();
+                        layouts.insert(
+                            label.clone(),
+                            persist::layout_with_geometry(existing.as_ref(), &geometry),
+                        );
                     }
                 }
                 let _ = (state.save_config)();
@@ -611,6 +647,44 @@ mod tests {
         assert!(rel.is_file(), "cwd 下的 Cargo.toml 应原样命中：{rel:?}");
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn remember_layout_seeds_window_decorations_override() {
+        // M2.4 B1 回归：建窗后预填布局记忆，重启后首次几何刷新（layout_with_geometry）
+        // 的 existing 恒有值 → `[window.<id>].decorations` 覆盖不被冲刷为 None。
+        let layouts: Arc<Mutex<HashMap<String, WindowLayout>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let override_layout = WindowLayout {
+            position: Some((1.0, 2.0)),
+            size: None,
+            monitor: None,
+            decorations: Some(false), // 手动切无边框（窗口级覆盖）
+        };
+        remember_layout(&layouts, "sys-cpu", &override_layout);
+        assert_eq!(
+            layouts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get("sys-cpu")
+                .and_then(|l| l.decorations),
+            Some(false)
+        );
+
+        // 几何刷新保留覆盖（等同重启后第一次移动窗口的路径）
+        let geometry = pano_window::WindowGeometry {
+            position: (9.0, 9.0),
+            size: (400.0, 300.0),
+            monitor: pano_window::MonitorId::new("primary"),
+        };
+        let existing = layouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get("sys-cpu")
+            .cloned();
+        let refreshed = pano_window::persist::layout_with_geometry(existing.as_ref(), &geometry);
+        assert_eq!(refreshed.decorations, Some(false), "覆盖不被几何刷新冲刷");
+        assert_eq!(refreshed.position, Some((9.0, 9.0)), "几何本身更新");
     }
 
     #[test]

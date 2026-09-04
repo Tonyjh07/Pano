@@ -62,7 +62,9 @@ impl WindowService for TauriWindowService {
         .title(&merged.title)
         .inner_size(merged.size.0, merged.size.1)
         .always_on_top(merged.always_on_top)
-        .fullscreen(merged.fullscreen);
+        .fullscreen(merged.fullscreen)
+        // M2.4 无边框：组件声明 / 窗口级覆盖（persist::apply_layout 已合并）
+        .decorations(merged.decorations);
 
         // 定位决策（persist::placement_of）：记忆位置优先；
         // 无记忆位置但有显示器偏好 → 定位该显示器（不可用回退默认，不硬失败）。
@@ -172,6 +174,19 @@ impl WindowHandle for TauriWindowHandle {
         self.window
             .set_position(tauri::LogicalPosition::new(x, y))
             .map_err(|e| WindowError::Other(format!("移动到显示器失败：{e}")))
+    }
+
+    fn set_decorations(&self, enabled: bool) -> Result<(), WindowError> {
+        tracing::debug!(target: "pano::window", id = %self.window.label(), enabled, "无边框切换");
+        self.window
+            .set_decorations(enabled)
+            .map_err(|e| WindowError::Other(format!("无边框切换失败：{e}")))
+    }
+
+    fn is_decorated(&self) -> Result<bool, WindowError> {
+        self.window
+            .is_decorated()
+            .map_err(|e| WindowError::Other(format!("读取边框状态失败：{e}")))
     }
 
     fn set_position(&self, x: f64, y: f64) -> Result<(), WindowError> {

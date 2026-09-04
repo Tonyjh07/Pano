@@ -151,10 +151,14 @@
 
 **专用渲染器 `SysDashboard.svelte`**（`renderers.ts` 注册 `sys-dashboard`）：
 
-- 汽车仪表盘式布局：左右两个**大仪表**（CPU、内存占用率），下方两个**小仪表**（磁盘活动率、网络利用率）；SVG 半圆弧刻度 0-100 + 指针 + 红区（阈值→100）；
+- 汽车仪表盘式布局：左右两个**大仪表**（CPU、内存占用率），下方两个**小仪表**（磁盘活动率、网络利用率）；SVG 240° 弧形表盘（M2.4 升级：12 点位为 0°、顺时针为正、行程 -120° → +120°，0 在 8 点 / 50 在 12 点 / 100 在 4 点）+ 指针 + 尾翼 + 红区（阈值→100）+ 霓虹辉光（径向渐变面板、drop-shadow）；
 - **磁盘仪表显示最忙盘符与活动率**：磁盘仪表的盘符取自 `sys.disk.busiest_disk`（如 `C:`），数值取自 `sys.disk.active_percent`（该最忙盘忙碌 %）；
 - 每个仪表下方一个**指示灯**：该指标占用率超其适配器 `high_threshold`（缺省 80）→ 亮红，否则绿色；
-- 数据取自通用窗口管道（ComponentWindow 传 seriesList / samples / latest），仪表显示 `latest` 瞬时值；`Gauge.svelte` 为可复用 SVG 半圆仪表（参数化大小 / 阈值 / 红区 / 副读数 detail）。
+- 数据取自通用窗口管道（ComponentWindow 传 seriesList / samples / latest），仪表显示 `latest` 瞬时值；`Gauge.svelte` 为可复用 SVG 汽车仪表盘（参数化大小 / 阈值 / 红区 / 副读数 detail）。
+
+**小分辨率自适应（M2.4 追加）**：目标场景 **400×100 小屏**。`SysDashboard` 以 `ResizeObserver` 观察容器高度，< 120px 切换**紧凑横条布局**（四表盘横排、尺寸按宽/高双预算取小 `min((宽-间隙)/4, (容器高-30)/0.66)` 并 clamp 48..104、短标签、磁盘盘符拼入标签、组件名印于表盘内省去独立标签行）；`ComponentWindow` 监听窗口尺寸（`innerSize` + `onResized`），窗口高 < 140px 折叠头部控件与内容区 padding，把高度让给仪表；两层阈值配合保证 h<100 场景必命中紧凑布局。
+
+**无边框窗口 + 内容拖拽（M2.4 追加）**：`WindowSpec` 增 `decorations`（默认 true，零破坏）；`sys-dashboard` 组件声明 `false`（小屏开箱即用）；`[window.<id>].decorations` 为**窗口级覆盖**（`WindowLayout.decorations: Option<bool>`，布局记忆刷新用 `layout_with_geometry` 保留覆盖，向后兼容旧配置）；「窗口管理」页提供**无边框开关**（`window_set_decorations` 命令：窗口服务即时切换 + 写回 + 定向 emit `pano://window-decorations`）；无边框窗口内容区（组件声明 `data-pano-drag` 区域 + 壳 header）**鼠标拖动直接移动窗口**（窗口壳 mousedown 委托 `startDragging`；组件只声明标记，平台调用收敛在壳）。
 
 **验收**：`cargo tauri dev` 后在「窗口管理」新建窗口绑定「资源仪表盘」（或删除 pano.toml 中的 `[ui]` / `[window.<id>]` 段——段缺失 = 首次运行，触发按目录播种并写回）；四个仪表实时反映占用，任一指标超阈值其指示灯变红；**磁盘仪表显示当前最忙盘符（如 `C:`）与活动率，空闲时活动率低、不恒满**。
 

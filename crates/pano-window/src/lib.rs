@@ -74,6 +74,12 @@ pub trait WindowHandle: Send + Sync {
     /// [`WindowError::MonitorUnavailable`]）。
     fn set_monitor(&self, monitor: &MonitorId) -> Result<(), WindowError>;
 
+    /// 无边框切换（M2.4）：`false` = 去掉系统边框 / 标题栏（内容区拖拽移动）。
+    fn set_decorations(&self, enabled: bool) -> Result<(), WindowError>;
+
+    /// 当前是否带系统边框（管理页「无边框」开关显示 / 前端拖拽判定）。
+    fn is_decorated(&self) -> Result<bool, WindowError>;
+
     /// 设置位置（逻辑像素）。
     fn set_position(&self, x: f64, y: f64) -> Result<(), WindowError>;
 
@@ -166,6 +172,12 @@ mod tests {
         }
         fn set_monitor(&self, _monitor: &MonitorId) -> Result<(), WindowError> {
             Ok(())
+        }
+        fn set_decorations(&self, _enabled: bool) -> Result<(), WindowError> {
+            Ok(())
+        }
+        fn is_decorated(&self) -> Result<bool, WindowError> {
+            Ok(true)
         }
         fn set_position(&self, _x: f64, _y: f64) -> Result<(), WindowError> {
             Ok(())

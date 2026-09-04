@@ -81,6 +81,13 @@
     );
   }
 
+  /** 无边框切换（M2.4）：去掉系统边框，内容区（data-pano-drag）拖拽移动。 */
+  function toggleDecorations(w: WindowInfo) {
+    void run(w.id, w.decorations ? "恢复边框" : "无边框", () =>
+      api.windowSetDecorations(w.id, !w.decorations),
+    );
+  }
+
   /** 切换组件：把表单选中的组件类型应用到目标窗口（仅换内容 / series，标题不动）。 */
   function switchComponent(w: WindowInfo) {
     if (!selectedComponent) return notify("error", "请先选择目标组件");
@@ -122,6 +129,7 @@
                 <th>组件</th>
                 <th>series</th>
                 <th>可见</th>
+                <th>边框</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -157,6 +165,21 @@
                   </td>
                   <td>
                     <span class:off={!w.visible}>{w.visible ? "显示" : "隐藏"}</span>
+                  </td>
+                  <td>
+                    {#if w.is_manager}
+                      <span class="dim">—</span>
+                    {:else}
+                      <button
+                        onclick={() => toggleDecorations(w)}
+                        disabled={busy.has(w.id)}
+                        title={w.decorations
+                          ? "有系统边框：点击切换为无边框（内容区可拖拽移动）"
+                          : "无边框：点击恢复系统边框"}
+                      >
+                        {w.decorations ? "有边框" : "无边框"}
+                      </button>
+                    {/if}
                   </td>
                   <td>
                     <div class="row-actions">

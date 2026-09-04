@@ -81,11 +81,12 @@
 | 新建窗口 | 输入窗口 id（全小写 ASCII 连字符）+ 标题（可选，默认 = 组件默认标题），从**组件目录**选择一个组件类型分配（`create_window(id, component, title?)`）；组件依赖的适配器未注册时不可选 |
 | 分配 / 切换组件 | 把目标组件类型应用到窗口（`set_window_component(id, component)`，可换成另一组件；**仅换内容 / series，标题与几何不动**）；对已打开窗口经 `pano://window-component` 事件通知其重载 |
 | 显示 / 隐藏 | 即时切换窗口可见状态（`window_show` / `window_hide`） |
+| **无边框开关（M2.4）** | 每监控窗口可切换系统边框（`window_set_decorations(id, enabled)`）：**无边框** = 去掉系统标题栏，内容区（组件声明的 `data-pano-drag` 区域 + 窗口壳 header）**鼠标拖动直接移动窗口**；窗口级覆盖持久化到 `[window.<id>].decorations`，重启恢复；管理窗口不可用（其内容无拖拽标记） |
 | 销毁窗口 | 彻底关闭并从窗口管理器移除（区别于隐藏）；管理窗口不可销毁 |
 
-- 窗口列表含管理窗口（标记「管理」，不可销毁）与全部监控窗口，显示当前可见状态与分配的组件；
+- 窗口列表含管理窗口（标记「管理」，不可销毁）与全部监控窗口，显示当前可见状态、分配的组件与**边框状态**（「有边框 / 无边框」开关）；
 - 改动后同步触发托盘「窗口列表」重建（`refresh_tray`）并写回 `[ui].windows` / `[window.<id>]` 持久化；动态创建的窗口即时进入托盘列表，重启恢复；
-- 命令：`list_windows` / `list_components` / `window_content` / `create_window` / `set_window_component` / `destroy_window` / `window_show` / `window_hide`。
+- 命令：`list_windows` / `list_components` / `window_content` / `create_window` / `set_window_component` / `destroy_window` / `window_show` / `window_hide` / `window_set_decorations`。
 
 ### 3.3 全局设置
 
@@ -99,7 +100,9 @@
 - 每个可分配单位为一种 **UI 组件类型**（`ComponentSpec`：id / name / 固定 series / 默认窗口），由 `UISpec.components` 组件目录声明；监控窗口持有一种组件类型，前端按组件 id 分派渲染器（M2.3 起可注册专用渲染组件）；
 - M1.2 决策「1 组件 = 1 窗口」延续为「**1 窗口 = 1 组件**」：首次运行按目录播种默认监控窗口（label = 组件 id，仅当组件 series 存在数据源）并写回 `[ui].windows`；此后窗口集合由配置持久化恢复，可经窗口管理页新建 / 切换组件；多个窗口可绑定同一组件；
 - 组件内容：组件名 + 最新值 + 最近窗口曲线 + 窗口控制按钮（置顶 / 全屏 / 绑定显示器菜单）；M2.2 通用渲染 = 组件固定 series 逐个渲染「数值卡 + 曲线」；
-- **专用渲染（M2.3）**：`sys-dashboard`（「资源仪表盘」）注册专用渲染器 `SysDashboard.svelte`——汽车仪表盘式布局（左右大仪表 CPU / 内存、下方小仪表磁盘活动率 / 网络利用率，SVG 半圆弧刻度 + 指针 + 红区）；每个仪表下方一个**指示灯**：指标占用率超其适配器 `high_threshold`（默认 80，pano.toml 每适配器可配）→ 亮红，否则绿色；数据取自窗口数据管道 `latest`，阈值经 `list_adapters` 的 `config` 读取；**磁盘仪表显示当前最忙盘符与活动率**（盘符取自 `sys.disk.busiest_disk`，数值取自 `sys.disk.active_percent`）；
+- **专用渲染（M2.3 / M2.4）**：`sys-dashboard`（「资源仪表盘」）注册专用渲染器 `SysDashboard.svelte`——**汽车仪表盘式布局**：上方左右两个大仪表（CPU / 内存占用率）、下方左右两个小仪表（磁盘活动率 / 网络利用率）；表盘为 **SVG 240° 弧形**（以 12 点位为 0°、顺时针为正、行程 -120° → +120°——即真实汽车仪表盘几何：0 在 8 点方向、50 在 12 点顶部、100 在 4 点方向），含外圈金属边框、长短刻度、0/25/50/75/100 数值标签、红区（阈值→100）、指针 + 尾翼、中心 hub、**组件名印于表盘内**（hub 下方，弧底部开口处空白；紧凑模式借此省掉独立标签行的高度）；霓虹辉光（表盘径向渐变面板 + 指针/红区 drop-shadow）。每个仪表下方一个**指示灯**：指标占用率超其适配器 `high_threshold`（默认 80，pano.toml 每适配器可配）→ 亮红，否则绿色；数据取自窗口数据管道 `latest`，阈值经 `list_adapters` 的 `config` 读取；**磁盘仪表显示当前最忙盘符与活动率**（盘符取自 `sys.disk.busiest_disk`，数值取自 `sys.disk.active_percent`）；
+- **小分辨率自适应（M2.4）**：`SysDashboard` 用 `ResizeObserver` 观察容器高度，低于阈值（120px）时切换为**紧凑横条布局**——四个表盘横排、尺寸按**宽度与高度双预算取小**（宽 `(宽-间隙)/4`、高 `(容器高-30)/0.66`，clamp 48..104）避免溢出裁切，标签换短名、磁盘最忙盘符拼入标签——支持 **400×100 小屏**；`ComponentWindow` 窗口壳监听窗口尺寸（`innerSize` + `onResized`），窗口高度 < 140px 时折叠头部控件（仅留组件名单行极简条）并压缩内容区 padding，把高度让给仪表；两层阈值配合保证 h<100 场景必命中紧凑布局；
+- **无边框 + 内容拖拽（M2.4）**：`sys-dashboard` 组件默认声明无边框（`WindowSpec.decorations = false`，小屏开箱即用）；组件在可拖区域声明 `data-pano-drag`（`SysDashboard` 整块仪表盘、窗口壳 header 组件名），**窗口壳**（ComponentWindow，持 `getCurrentWindow`）在无边框时于 mousedown 委托 `startDragging` 移动窗口——组件只声明标记、平台调用收敛在壳（换窗口后端组件零改动）；有边框窗口由系统标题栏拖动；无边框切换经「窗口管理」页开关（命令层 → 窗口服务 → 定向 emit `pano://window-decorations` 事件同步前端）；
 - **窗口标题**：播种 / 新建窗口默认取组件默认标题（`ComponentSpec.window.title`），可经 `create_window` 的 `title` 参数覆盖；标题为窗口独立属性（持久化于 `[window.<id>].title`），切换组件不改变标题；
 - 空态：组件绑定**已注册但未启用**的适配器时，窗口显示空态（无「0」误导）；组件对应适配器**未注册**（feature 未编译）时组件在「窗口管理」页置灰不可选、不会建窗；
 - **重启恢复**：持久化窗口绑定的组件在新构建中未注册（feature 关闭）时跳过建窗并 warn 日志（取向与首次播种「无数据源不建窗」一致），其余窗口正常恢复；
@@ -117,6 +120,7 @@
   - 曲线色板：蓝 / 青 / 绿 / 橙 / 紫，依序取用；
 - 间距 8px 基准；面板圆角 4px；状态徽标 = 圆点 + 文字；
 - 前端以 CSS 变量实现主题（暗色默认，亮色切换预留）。
+- **仪表盘视觉（M2.4 升级）**：汽车仪表盘面板 = 径向渐变底 + 内阴影 + 圆角（`.gauge`）；霓虹辉光经 `filter: drop-shadow` 施加于指针 / 红区 / 指示灯 / hub；红区与超阈值状态共用错误色 `--err`，正常指示灯 `--ok`，辉光同色系。
 
 ## 6. 渲染与刷新策略（M1.2：事件驱动）
 
@@ -149,6 +153,7 @@
 | 置顶 / 全屏 | Tauri 窗口 API：`set_always_on_top` / `set_fullscreen`（Rust 侧命令暴露给前端） |
 | 绑定显示器 | Tauri monitor API：枚举显示器 → `MonitorId` → `set_position` 定位 / 全屏到指定显示器 |
 | 位置 / 大小记忆 | 布局持久化：`[window.<id>]` 配置段（位置 / 大小 / 显示器），启动恢复 |
+| 无边框窗口 | 建窗 `decorations`（组件声明 + `[window.<id>].decorations` 覆盖合并）；运行期 `set_decorations` 即时切换；无边框时内容 `data-pano-drag` 区域经 `startDragging` 拖拽移动（M2.4） |
 | 隐藏不退出 | 关闭请求 → 拦截（`CloseRequested`）→ 隐藏窗口；托盘「退出」才结束进程 |
 | 托盘 | `tray-icon` crate（主进程侧）；菜单事件 → 命令 → 打开 / 聚焦窗口、退出 |
 | 数据推送（core → 前端） | 桥接层订阅 SampleStore → `AppHandle.emit` 事件 → 前端 `listen` |

@@ -152,6 +152,10 @@ pub struct WindowSpec {
     pub fullscreen: bool,
     /// 显示器偏好（序列化标识；缺省 = 主显示器 / 上次所在）。
     pub monitor: Option<String>,
+    /// 有无系统边框/标题栏（M2.4）：`false` = 无边框窗口，内容区拖拽移动
+    /// （前端 `data-pano-drag` 区域 + `startDragging`）。窗口级可经
+    /// `[window.<id>].decorations` 覆盖（`WindowLayout.decorations`）。
+    pub decorations: bool,
 }
 
 impl Default for WindowSpec {
@@ -163,6 +167,7 @@ impl Default for WindowSpec {
             always_on_top: false,
             fullscreen: false,
             monitor: None,
+            decorations: true,
         }
     }
 }
@@ -275,6 +280,18 @@ mod tests {
         assert_eq!(spec.size, (800.0, 600.0));
         assert!(!spec.always_on_top && !spec.fullscreen);
         assert!(spec.position.is_none() && spec.monitor.is_none());
+        // M2.4：默认有边框（decorations = true），无边框由组件声明 / 窗口设置显式开启
+        assert!(spec.decorations);
+    }
+
+    #[test]
+    fn window_spec_can_declare_frameless() {
+        // sys-dashboard 等专用组件可声明无边框（M2.4，小屏仪表盘窗口）
+        let spec = WindowSpec {
+            decorations: false,
+            ..WindowSpec::default()
+        };
+        assert!(!spec.decorations);
     }
 
     #[test]

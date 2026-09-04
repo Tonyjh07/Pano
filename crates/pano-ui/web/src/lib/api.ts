@@ -69,6 +69,8 @@ export interface WindowInfo {
   series: string[];
   is_manager: boolean;
   visible: boolean;
+  /** 当前是否带系统边框（M2.4，管理页「无边框」开关显示）。 */
+  decorations: boolean;
 }
 
 export interface ComponentInfo {
@@ -83,6 +85,8 @@ export interface ComponentInfo {
 export interface WindowContent {
   component: string;
   series: string[];
+  /** 当前是否带系统边框（M2.4，前端据此决定内容区拖拽移动）。 */
+  decorations: boolean;
 }
 
 /** 命令封装：参数名用 camelCase，Tauri 自动映射为 Rust 的 snake_case。 */
@@ -116,6 +120,10 @@ export const api = {
 
   windowSetMonitor: (label: string, monitorId: string) =>
     invoke<void>("window_set_monitor", { label, monitorId }),
+
+  /** 无边框切换（M2.4，管理页「无边框」开关）。 */
+  windowSetDecorations: (label: string, enabled: boolean) =>
+    invoke<void>("window_set_decorations", { label, enabled }),
 
   windowHide: (label: string) => invoke<void>("window_hide", { label }),
 
