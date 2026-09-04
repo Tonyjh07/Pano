@@ -160,6 +160,7 @@ pub struct WindowSpec {
     pub always_on_top: bool,             // 初始置顶
     pub fullscreen: bool,                // 初始全屏
     pub monitor: Option<String>,         // 显示器偏好（序列化标识，如 "primary" / 自定义编号；缺省 = 主显示器 / 上次所在）
+    pub decorations: bool,               // M2.4：有无系统边框（false = 无边框，内容区 data-pano-drag 拖拽移动；可被 [window.<id>].decorations 窗口级覆盖）
 }
 ```
 
@@ -286,10 +287,12 @@ pano/
   - `set_fullscreen(bool)` —— 全屏切换；
   - `set_always_on_top(bool)` —— 置顶切换；
   - `set_monitor(MonitorId)` —— 绑定特定显示器（配合位置/大小）；
+  - `set_decorations(bool)` / `is_decorated()` —— **无边框切换 / 状态查询**（M2.4）；
   - `set_position(px, py)` / `set_size(w, h)` —— 窗口几何；
   - `focus()` / `show()` / `hide()` —— 可见性；
   - `close()` —— 关闭 = 隐藏（不退出进程，M1.1 语义延续；退出仅经托盘「退出」）。
 - **布局持久化**：窗口关闭 / 退出时记录位置、大小、所在显示器到 `[window.<id>]` 配置段，下次启动恢复；也可由 API / 配置**指定显示器打开**；
+- **无边框（M2.4）**：`WindowSpec.decorations`（组件声明默认，`sys-dashboard` 为 `false` 开箱即用）+ `[window.<id>].decorations`（窗口级覆盖，`persist::apply_layout` 合并，布局记忆刷新时用 `layout_with_geometry` 保留该覆盖）；管理窗口页提供「无边框」开关（`window_set_decorations` 命令 → 窗口服务 + 写回 + 定向 emit 事件）；**内容拖拽移动**：组件在可拖区域声明 `data-pano-drag`（纯 HTML 属性，SysDashboard 整块、窗口壳 header 组件名），窗口壳（ComponentWindow，Tauri 前端）在无边框时于 mousedown 委托 `startDragging`，有边框窗口由系统标题栏负责拖动；
 - **显示器枚举**：`monitors() -> Vec<MonitorInfo>`，`MonitorId` 标识（主显示器 / 次显示器 / 自定义编号）。
 
 依赖方向（M1.2 审查定稿）：

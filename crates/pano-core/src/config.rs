@@ -73,6 +73,9 @@ pub struct WindowLayout {
     pub size: Option<(f64, f64)>,
     /// 所在显示器（序列化标识）。
     pub monitor: Option<String>,
+    /// 无边框覆盖（M2.4）：`Some` = 窗口级覆盖（持久化，优先于组件声明的
+    /// `WindowSpec.decorations`）；`None` = 采用组件声明。旧配置无此字段自动为 None。
+    pub decorations: Option<bool>,
 }
 
 /// `[core]` 全局配置。
@@ -415,6 +418,7 @@ monitor = "primary"
                 position: Some((1.0, 2.0)),
                 size: None,
                 monitor: None,
+                decorations: None,
             }),
         );
         let reparsed = PanoConfig::parse(&edited.to_toml().unwrap()).unwrap();
@@ -448,6 +452,50 @@ position = [1.0, 2.0]
 "#;
         let err = PanoConfig::parse(text).unwrap_err();
         assert!(matches!(err, CoreError::Config(_)));
+    }
+
+    #[test]
+    fn window_layout_decorations_roundtrip() {
+        // 窗口级无边框覆盖持久化（M2.4）：Some(false) 显式写回并恢复。
+        let text = r#"
+schema_version = 1
+[window."sys-dash"]
+decorations = false
+"#;
+        let config = PanoConfig::parse(text).unwrap();
+        assert_eq!(
+            config.window_layout("sys-dash").unwrap().decorations,
+            Some(false)
+        );
+
+        // 写回 → 重新解析一致
+        let mut edited = config.clone();
+        edited.set_window_layout(
+            "sys-dash",
+            Some(WindowLayout {
+                position: None,
+                size: None,
+                monitor: None,
+                decorations: Some(true),
+            }),
+        );
+        let reparsed = PanoConfig::parse(&edited.to_toml().unwrap()).unwrap();
+        assert_eq!(
+            reparsed.window_layout("sys-dash").unwrap().decorations,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn window_layout_decorations_defaults_none_for_legacy_config() {
+        // 旧配置无 decorations 字段 → None（采用组件声明，向后兼容）。
+        let text = r#"
+schema_version = 1
+[window."sys-cpu"]
+position = [1.0, 2.0]
+"#;
+        let config = PanoConfig::parse(text).unwrap();
+        assert_eq!(config.window_layout("sys-cpu").unwrap().decorations, None);
     }
 
     #[test]
@@ -521,6 +569,7 @@ component = "sys-mem"
                 position: Some((1.0, 2.0)),
                 size: None,
                 monitor: None,
+                decorations: None,
             }),
         );
         let w = config.window_config("win-a").unwrap();

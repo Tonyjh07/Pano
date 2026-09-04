@@ -82,6 +82,9 @@ pub fn uispec() -> UISpec {
                 window: WindowSpec {
                     title: "资源仪表盘".into(),
                     size: (860.0, 540.0),
+                    // M2.4：仪表盘窗口默认无边框（小屏 400×100 场景开箱即用；
+                    // 内容区拖拽移动，可在「窗口管理」页按窗口覆盖）。
+                    decorations: false,
                     ..WindowSpec::default()
                 },
             },

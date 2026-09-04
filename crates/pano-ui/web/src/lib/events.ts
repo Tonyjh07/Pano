@@ -5,6 +5,12 @@ import type { SampleEvent } from "./api";
 
 export const EVENT_SAMPLE = "pano://sample";
 
+/** 窗口内容变更（切换组件类型，命令层定向 emit 给目标窗口）。 */
+export const EVENT_WINDOW_COMPONENT = "pano://window-component";
+
+/** 窗口无边框切换（M2.4，命令层定向 emit 给目标窗口，payload: boolean）。 */
+export const EVENT_WINDOW_DECORATIONS = "pano://window-decorations";
+
 export interface SampleSubscription {
   /** 取消订阅。 */
   unlisten: UnlistenFn;

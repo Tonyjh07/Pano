@@ -15,6 +15,10 @@ pub const EVENT_SAMPLE: &str = "pano://sample";
 /// 前端监听的事件名（窗口内容变更：切换组件类型 / series，命令层定向 emit 给目标窗口）。
 pub const EVENT_WINDOW_COMPONENT: &str = "pano://window-component";
 
+/// 前端监听的事件名（窗口无边框切换，命令层定向 emit 给目标窗口，M2.4；
+/// 前端据此更新内容区拖拽判定）。
+pub const EVENT_WINDOW_DECORATIONS: &str = "pano://window-decorations";
+
 /// 启动桥接任务：在 tauri 异步运行时上订阅 SampleStore，样本到达即 emit。
 ///
 /// 前端加载完成后先拉取快照（`series_history` 命令）再增量订阅；

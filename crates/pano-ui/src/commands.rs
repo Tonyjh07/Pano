@@ -123,6 +123,7 @@ pub fn list_components(state: State<'_, AppState>) -> Vec<ComponentInfo> {
 /// 某窗口当前内容（component + series；组件窗口前端按窗口 label 查询，ui.md §4）。
 ///
 /// 窗口的 series 由绑定的组件类型在目录中解析（窗口不再直接存 series，M2.2）。
+/// M2.4：附带当前无边框状态（前端据此决定内容区拖拽移动）。
 #[tauri::command]
 pub fn window_content(state: State<'_, AppState>, id: String) -> Result<WindowContentDto, String> {
     let windows = state.windows().lock().unwrap_or_else(|e| e.into_inner());
@@ -130,9 +131,15 @@ pub fn window_content(state: State<'_, AppState>, id: String) -> Result<WindowCo
         .get(&id)
         .ok_or_else(|| format!("窗口不存在：{id}"))?;
     let series = component_series_of(&state.ui_spec, &entry.component);
+    let decorations = state
+        .window_service
+        .handle(&id)
+        .and_then(|h| h.is_decorated())
+        .unwrap_or(true);
     Ok(WindowContentDto {
         component: entry.component.clone(),
         series: series.iter().map(|s| s.as_str().to_string()).collect(),
+        decorations,
     })
 }
 
@@ -209,6 +216,44 @@ pub fn window_set_monitor(
         .map_err(|e| e.to_string())?
         .set_monitor(&monitor)
         .map_err(|e| e.to_string())
+}
+
+/// 窗口：无边框切换（M2.4，管理页「无边框」开关）。
+///
+/// 切换实际边框状态 + 持久化窗口级覆盖（`[window.<id>].decorations`），
+/// 并定向 emit 给目标窗口，前端据此更新内容区拖拽判定。
+#[tauri::command]
+pub async fn window_set_decorations<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, AppState>,
+    label: String,
+    enabled: bool,
+) -> Result<(), String> {
+    tracing::debug!(target: "pano::ui", label = %label, enabled, "窗口无边框切换");
+    state
+        .window_service
+        .handle(&label)
+        .map_err(|e| e.to_string())?
+        .set_decorations(enabled)
+        .map_err(|e| e.to_string())?;
+    // 持久化窗口级覆盖（布局段，M2.4）
+    state
+        .window_layouts()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(label.clone())
+        .or_default()
+        .decorations = Some(enabled);
+    // 通知该窗口前端更新拖拽判定（先于写回：边框已实际切换，写回失败也不
+    // 让前端拖拽判定失步——审查 S2）
+    use tauri::Emitter;
+    let _ = app.emit_to(
+        tauri::EventTarget::labeled(&label),
+        crate::bridge::EVENT_WINDOW_DECORATIONS,
+        enabled,
+    );
+    (state.save_config)().map_err(|e| format!("无边框设置写回失败：{e}"))?;
+    Ok(())
 }
 
 /// 窗口：设置位置（逻辑像素）。
@@ -291,6 +336,12 @@ pub fn list_windows(state: State<'_, AppState>) -> Vec<WindowInfoDto> {
                 .window_service
                 .is_visible(id)
                 .unwrap_or_else(|_| state.window_service.exists(id)),
+            // M2.4：当前无边框状态（管理页「无边框」开关显示）
+            decorations: state
+                .window_service
+                .handle(id)
+                .and_then(|h| h.is_decorated())
+                .unwrap_or(true),
         });
     }
     out.sort_by(|a, b| {
@@ -393,6 +444,12 @@ pub async fn set_window_component<R: tauri::Runtime>(
     let payload = WindowContentDto {
         component: component.clone(),
         series: series.iter().map(|s| s.as_str().to_string()).collect(),
+        // M2.4：附带当前无边框状态（切换组件不改变边框）
+        decorations: state
+            .window_service
+            .handle(&id)
+            .and_then(|h| h.is_decorated())
+            .unwrap_or(true),
     };
     let _ = app.emit_to(
         tauri::EventTarget::labeled(&id),
@@ -506,6 +563,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
         window_set_fullscreen,
         window_set_always_on_top,
         window_set_monitor,
+        window_set_decorations,
         window_set_position,
         window_set_size,
         window_focus,

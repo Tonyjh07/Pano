@@ -15,8 +15,9 @@ use crate::monitor::MonitorId;
 
 /// 把持久化布局合并进窗口声明：布局（记忆）优先，缺省回落声明值。
 ///
-/// 仅影响 `position` / `size` / `monitor`；`title` / `always_on_top` /
-/// `fullscreen` 始终以声明为准。
+/// 仅影响 `position` / `size` / `monitor` / `decorations`（M2.4：无边框由
+/// 窗口级设置覆盖，`layout.decorations` 为 `Some` 时优先，否则用组件声明）；
+/// `title` / `always_on_top` / `fullscreen` 始终以声明为准。
 pub fn apply_layout(spec: &WindowSpec, layout: Option<&WindowLayout>) -> WindowSpec {
     let Some(layout) = layout else {
         return spec.clone();
@@ -28,6 +29,7 @@ pub fn apply_layout(spec: &WindowSpec, layout: Option<&WindowLayout>) -> WindowS
         always_on_top: spec.always_on_top,
         fullscreen: spec.fullscreen,
         monitor: layout.monitor.clone().or_else(|| spec.monitor.clone()),
+        decorations: layout.decorations.unwrap_or(spec.decorations),
     }
 }
 
@@ -40,6 +42,24 @@ pub fn layout_from_geometry(geometry: &WindowGeometry) -> WindowLayout {
         position: Some(geometry.position),
         size: Some(geometry.size),
         monitor: Some(geometry.monitor.as_str().to_string()),
+        // 无边框非几何属性：不由布局记忆写回（由窗口设置显式持久化）
+        decorations: None,
+    }
+}
+
+/// 更新布局记忆时保留窗口级非几何覆盖（M2.4）。
+///
+/// 位置 / 大小 / 显示器取自最新几何；`decorations` 保留既有持久化覆盖
+/// （否则移动 / 缩放窗口触发的记忆更新会把「无边框」覆盖冲刷为 `None`）。
+pub fn layout_with_geometry(
+    existing: Option<&WindowLayout>,
+    geometry: &WindowGeometry,
+) -> WindowLayout {
+    WindowLayout {
+        position: Some(geometry.position),
+        size: Some(geometry.size),
+        monitor: Some(geometry.monitor.as_str().to_string()),
+        decorations: existing.and_then(|l| l.decorations),
     }
 }
 
@@ -96,6 +116,7 @@ mod tests {
             always_on_top: true,
             fullscreen: false,
             monitor: Some("primary".into()),
+            decorations: true,
         }
     }
 
@@ -115,6 +136,7 @@ mod tests {
             position: Some((100.0, 200.0)),
             size: None, // 缺省回落声明值
             monitor: Some("monitor-1".into()),
+            decorations: None,
         };
         let merged = apply_layout(&spec(), Some(&layout));
         assert_eq!(merged.position, Some((100.0, 200.0)));
@@ -123,6 +145,32 @@ mod tests {
         // 非几何字段不受布局影响
         assert!(merged.always_on_top);
         assert_eq!(merged.title, "示例");
+        // M2.4：布局未覆盖 decorations → 回落组件声明（默认有边框）
+        assert!(merged.decorations);
+    }
+
+    #[test]
+    fn apply_layout_window_decorations_override_wins() {
+        // 窗口级无边框覆盖（M2.4）：Some(false) 优先于组件声明（true）
+        let layout = WindowLayout {
+            position: None,
+            size: None,
+            monitor: None,
+            decorations: Some(false),
+        };
+        let merged = apply_layout(&spec(), Some(&layout));
+        assert!(!merged.decorations);
+
+        // 组件声明无边框 + 布局无覆盖 → 保持无边框
+        let frameless_spec = WindowSpec {
+            decorations: false,
+            ..spec()
+        };
+        let no_override = WindowLayout {
+            decorations: None,
+            ..WindowLayout::default()
+        };
+        assert!(!apply_layout(&frameless_spec, Some(&no_override)).decorations);
     }
 
     #[test]
@@ -154,6 +202,7 @@ mod tests {
             position: Some((300.0, 200.0)),
             size: Some((800.0, 600.0)),
             monitor: Some("monitor-2".into()),
+            decorations: None,
         };
         // 记忆位置优先于显示器偏好（B1 回归：不得被显示器原点覆盖）。
         assert_eq!(
@@ -168,6 +217,7 @@ mod tests {
             position: None,
             size: None,
             monitor: Some("monitor-2".into()),
+            decorations: None,
         };
         assert_eq!(
             placement_of(&spec_no_position(), Some(&layout)),
@@ -182,11 +232,32 @@ mod tests {
             position: None,
             size: None,
             monitor: Some("primary".into()),
+            decorations: None,
         };
         assert_eq!(
             placement_of(&spec_no_position(), Some(&layout)),
             Placement::Default
         );
+    }
+
+    #[test]
+    fn layout_with_geometry_preserves_window_decorations_override() {
+        // M2.4：移动/缩放刷新记忆时保留窗口级无边框覆盖
+        let geometry = WindowGeometry {
+            position: (1.0, 2.0),
+            size: (400.0, 100.0),
+            monitor: MonitorId::new("primary"),
+        };
+        let existing = WindowLayout {
+            decorations: Some(false),
+            ..WindowLayout::default()
+        };
+        let layout = layout_with_geometry(Some(&existing), &geometry);
+        assert_eq!(layout.position, Some((1.0, 2.0)));
+        assert_eq!(layout.size, Some((400.0, 100.0)));
+        assert_eq!(layout.decorations, Some(false), "覆盖不被几何刷新冲刷");
+        // 无既有覆盖 → None（沿用组件声明）
+        assert_eq!(layout_with_geometry(None, &geometry).decorations, None);
     }
 
     /// 无位置 / 无显示器偏好的声明（定位决策测试用）。
@@ -198,6 +269,7 @@ mod tests {
             always_on_top: false,
             fullscreen: false,
             monitor: None,
+            decorations: true,
         }
     }
 }

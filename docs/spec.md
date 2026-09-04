@@ -102,7 +102,7 @@
 ## 8. 配置规范
 
 - 运行时配置：`pano.toml`（放用户配置目录，M1 定路径；开发期可放项目根目录）。
-- 顶层字段：`schema_version`（当前 1）、`[core]`（默认采样策略等）、`[adapters.<id>]`、`[ui]`（M2.2：持久化监控窗口 id 列表 `windows`）、`[window.<id>]`（窗口持久化：`component` 组件绑定 + `title` 标题覆盖 + 布局 `position` / `size` / `monitor`，由命令层 / 窗口服务读写）。
+- 顶层字段：`schema_version`（当前 1）、`[core]`（默认采样策略等）、`[adapters.<id>]`、`[ui]`（M2.2：持久化监控窗口 id 列表 `windows`）、`[window.<id>]`（窗口持久化：`component` 组件绑定 + `title` 标题覆盖 + 布局 `position` / `size` / `monitor` + **`decorations`**（M2.4：无边框窗口级覆盖，`false` = 无边框；缺省 = 采用组件声明的 `WindowSpec.decorations`，向后兼容旧配置），由命令层 / 窗口服务读写）。
 - 每个适配器配置段固定字段：`enabled`、`sampling`（如 `"500ms"`），其余为该适配器自定义字段（**发给外部服务的 `/start` 配置**，含 `sampling`；本地适配器即其采集参数）。
 - **M4 远程适配器段**：`[adapters."<id>"]` 增 `remote`（`endpoint` 必填、`token` 可选 → `Authorization` / 自定义头）——**Pano 侧连接信息，不进 `/start` 请求体**，与自定义字段（进 `/start`）区分；连接由管理面板「连接远程适配器」发起并写回，重启自动恢复（architecture §14.1）；
 - **M4 UI 插件目录**：`ui-plugins/<plugin-id>/`（`manifest.json` + `dist/`），启动扫描合并进组件目录（architecture §15）；无该目录 → 行为与现状一致。

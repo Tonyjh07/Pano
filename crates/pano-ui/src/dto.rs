@@ -96,6 +96,8 @@ pub struct WindowInfoDto {
     pub is_manager: bool,
     /// 当前是否可见。
     pub visible: bool,
+    /// 当前是否带系统边框（M2.4，管理页「无边框」开关显示）。
+    pub decorations: bool,
 }
 
 /// UI 组件目录项（「窗口管理」页选组件用）。
@@ -114,6 +116,8 @@ pub struct ComponentInfo {
 pub struct WindowContentDto {
     pub component: String,
     pub series: Vec<String>,
+    /// 当前是否带系统边框（M2.4，前端据此决定内容区拖拽移动）。
+    pub decorations: bool,
 }
 
 impl From<&pano_window::MonitorInfo> for MonitorDto {

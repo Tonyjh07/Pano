@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { api, type MonitorInfo, type SampleEvent, type WindowContent } from "../lib/api";
-  import { onSample } from "../lib/events";
+  import { EVENT_WINDOW_COMPONENT, EVENT_WINDOW_DECORATIONS, onSample } from "../lib/events";
   import { resolveRenderer } from "./renderers";
 
   // 窗口壳（ui.md §4，M2.2）：负责数据管道（窗口内容查询、series 订阅 / 缓冲），
@@ -19,16 +19,41 @@
   let unlisten: (() => void) | null = null;
   let unlistenContent: (() => void) | null = null;
 
+  // 无边框状态（M2.4）：false = 无边框窗口，内容区（data-pano-drag）可拖拽移动
+  let decorations = $state(true);
+  let unlistenDecor: (() => void) | null = null;
+
   // 窗口控制状态
   let pinned = $state(false);
   let fullscreen = $state(false);
   let monitors: MonitorInfo[] = $state([]);
+
+  // 小分辨率自适应（M2.4）：窗口高度 < COMPACT_H → 折叠头部控件、压缩内容区 padding。
+  // 阈值高于 SysDashboard 的紧凑阈值（120），保证 h<100 场景头部折叠后渲染器必命中紧凑布局。
+  const COMPACT_H = 140;
+  let compact = $state(false);
+  let unlistenResize: (() => void) | null = null;
+
+  /** 监听窗口高度变化（Tauri 窗口尺寸 API；非 Tauri 环境回落常规模式）。 */
+  async function watchHeight() {
+    const w = getCurrentWindow();
+    try {
+      const size = await w.innerSize();
+      compact = size.height < COMPACT_H;
+      unlistenResize = await w.onResized(({ payload }) => {
+        compact = payload.height < COMPACT_H;
+      });
+    } catch {
+      /* 尺寸不可用 → 常规模式 */
+    }
+  }
 
   /** 载入本窗口的内容（组件 + series）并订阅样本（切换组件后重载）。 */
   async function load(label: string) {
     unlisten?.();
     const c = await api.windowContent(label);
     content = c;
+    decorations = c.decorations;
     seriesList = c.series;
     samplesBySeries = {};
     latest = {};
@@ -54,9 +79,14 @@
   onMount(async () => {
     const label = getCurrentWindow().label;
     try {
+      await watchHeight();
       // 「窗口管理」切换组件事件：重载本窗口内容
-      unlistenContent = await listen<WindowContent>("pano://window-component", () => {
+      unlistenContent = await listen<WindowContent>(EVENT_WINDOW_COMPONENT, () => {
         void load(label).catch((e) => (error = String(e)));
+      });
+      // 无边框切换事件（M2.4，管理页开关 → 命令层定向 emit）
+      unlistenDecor = await listen<boolean>(EVENT_WINDOW_DECORATIONS, (ev) => {
+        decorations = ev.payload;
       });
       await load(label);
       monitors = await api.monitors().catch(() => []);
@@ -68,7 +98,27 @@
   onDestroy(() => {
     unlisten?.();
     unlistenContent?.();
+    unlistenDecor?.();
+    unlistenResize?.();
   });
+
+  /**
+   * 无边框窗口内容区拖拽移动（M2.4）：mousedown 落在 `data-pano-drag` 区域
+   * 且不在交互控件上 → `startDragging`。有边框窗口由系统标题栏负责拖动。
+   * 组件只声明 `data-pano-drag` 标记（纯 HTML 属性），平台调用收敛在窗口壳。
+   */
+  async function onMouseDown(e: MouseEvent) {
+    if (decorations) return;
+    const target = e.target as HTMLElement | null;
+    if (!target || !target.closest("[data-pano-drag]")) return;
+    if (target.closest("button, select, input, a, textarea")) return;
+    e.preventDefault();
+    try {
+      await getCurrentWindow().startDragging();
+    } catch {
+      /* 平台不支持 / 环境异常：忽略 */
+    }
+  }
 
   async function setPin(v: boolean) {
     pinned = v;
@@ -90,30 +140,32 @@
 {:else if !content}
   <p class="dim load">加载中…</p>
 {:else}
-  <div class="window">
-    <header class="win-header">
-      <span class="component-name">{content.component || "（无组件）"}</span>
-      <div class="controls">
-        <button class:active={pinned} onclick={() => setPin(!pinned)} title="置顶">置顶</button>
-        <button class:active={fullscreen} onclick={() => setFullscreen(!fullscreen)} title="全屏">
-          全屏
-        </button>
-        {#if monitors.length > 0}
-          <select
-            value=""
-            onchange={(e) => setMonitor((e.currentTarget as HTMLSelectElement).value)}
-          >
-            <option value="" disabled>绑定显示器…</option>
-            {#each monitors as m}
-              <option value={m.id}>
-                {m.is_primary ? "主显示器" : m.name || m.id}
-              </option>
-            {/each}
-          </select>
-        {/if}
-      </div>
+  <div class="window" role="presentation" onmousedown={onMouseDown}>
+    <header class="win-header" class:compact>
+      <span class="component-name" data-pano-drag>{content.component || "（无组件）"}</span>
+      {#if !compact}
+        <div class="controls">
+          <button class:active={pinned} onclick={() => setPin(!pinned)} title="置顶">置顶</button>
+          <button class:active={fullscreen} onclick={() => setFullscreen(!fullscreen)} title="全屏">
+            全屏
+          </button>
+          {#if monitors.length > 0}
+            <select
+              value=""
+              onchange={(e) => setMonitor((e.currentTarget as HTMLSelectElement).value)}
+            >
+              <option value="" disabled>绑定显示器…</option>
+              {#each monitors as m}
+                <option value={m.id}>
+                  {m.is_primary ? "主显示器" : m.name || m.id}
+                </option>
+              {/each}
+            </select>
+          {/if}
+        </div>
+      {/if}
     </header>
-    <main>
+    <main class:compact>
       {#if seriesList.length === 0}
         <p class="dim">该组件未声明任何 series（数据源未启用？见管理窗口）。</p>
       {:else}
@@ -138,6 +190,14 @@
     background: var(--panel);
     border-bottom: 1px solid var(--border);
   }
+  /* 小分辨率：折叠头部 → 单行极简条，把高度让给仪表 */
+  .win-header.compact {
+    padding: 2px 6px;
+    border-bottom: none;
+  }
+  .win-header.compact .component-name {
+    font-size: 10px;
+  }
   .component-name {
     color: var(--text-dim);
     font-size: 12px;
@@ -158,6 +218,12 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  /* 小分辨率：内容区去掉留白，交给紧凑仪表布局 */
+  main.compact {
+    overflow: hidden;
+    padding: 2px;
+    gap: 2px;
   }
   .dim {
     color: var(--text-dim);
