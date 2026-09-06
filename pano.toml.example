@@ -1,0 +1,31 @@
+# Pano runtime configuration (C++/Qt port).
+# Copy to pano.toml and adjust. Sections use dotted keys: [adapters.<id>].
+
+[core]
+# Sampling buffer capacity per series (samples kept in the ring buffer).
+capacity = 600
+
+[ui]
+# Windows listed on startup (monitor window ids).
+windows = [ "sys-dashboard" ]
+
+# --- adapters ---
+# Each adapter is a section keyed by its id. `enabled` starts it on launch.
+# All values are optional; omitted fields fall back to adapter defaults.
+
+[adapters.sys.cpu]
+enabled = true
+high_threshold = 80
+
+[adapters.sys.mem]
+enabled = true
+high_threshold = 80
+
+[adapters.sys.disk]
+enabled = true
+high_threshold = 80
+
+[adapters.sys.net]
+enabled = true
+link_mbps = 1000
+high_threshold = 80

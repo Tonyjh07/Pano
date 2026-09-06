@@ -1,6 +1,17 @@
-# Rust
-/target
-Cargo.lock
+# C++ / CMake
+/build*/
+build/
+*.user
+
+# Qt
+*.pro.user
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
 
 # IDE
 .vscode/
@@ -13,3 +24,4 @@ Thumbs.db
 
 # Pano runtime
 pano.toml
+pano_trace.log
