@@ -1,93 +1,31 @@
-# pano.toml 示例模板（复制为 pano.toml 后按需修改）
-# pano.toml 为本地配置，不入库；本模板入库供参考。
-
-schema_version = 1
+# Pano runtime configuration (C++/Qt port).
+# Copy to pano.toml and adjust. Sections use dotted keys: [adapters.<id>].
 
 [core]
-# 默认采样周期（毫秒）
-sampling_ms = 500
+# Sampling buffer capacity per series (samples kept in the ring buffer).
+capacity = 600
 
-# 每个适配器一段；固定字段：enabled、sampling；其余为该适配器自定义字段
-# M2 起默认特性为系统监控适配器（spec §5）；示例适配器需显式启用对应 feature；
-# 远程适配器（M4）不经 feature，由管理面板「连接远程适配器」发起并写回 remote 段（见下方）
+[ui]
+# Windows listed on startup (monitor window ids).
+windows = [ "sys-dashboard" ]
 
-# --- 系统监控（默认 feature）---
-# 每个 sys 适配器可配 high_threshold（高占用阈值 %，默认 80，0..=100）：
-# 资源仪表盘（sys-dashboard）的指示灯据此判定（超阈值亮红）。
+# --- adapters ---
+# Each adapter is a section keyed by its id. `enabled` starts it on launch.
+# All values are optional; omitted fields fall back to adapter defaults.
 
-[adapters."sys.cpu"]
+[adapters.sys.cpu]
 enabled = true
-sampling = 500
-# per_core = true   # 额外推送各核心使用率（sys.cpu.cores，JSON）
-# high_threshold = 80
+high_threshold = 80
 
-[adapters."sys.mem"]
+[adapters.sys.mem]
 enabled = true
-sampling = 500
-# swap = true       # 额外推送交换分区使用率（sys.mem.swap_percent）
-# high_threshold = 80
+high_threshold = 80
 
-[adapters."sys.disk"]
+[adapters.sys.disk]
 enabled = true
-sampling = 1000
-# device = "C:"     # 仅统计磁盘名 / 挂载点包含该子串的设备
-# high_threshold = 80
-# 注：磁盘适配器另推送 sys.disk.active_percent（磁盘活动率 = 当前最忙磁盘的
-#     真实忙碌时间 %，Windows 用 PDH %DiskTime，Windows 先行）与
-#     sys.disk.busiest_disk（最忙盘盘符，如 "C:"）
+high_threshold = 80
 
-[adapters."sys.net"]
+[adapters.sys.net]
 enabled = true
-sampling = 1000
-# interface = "eth" # 仅统计网卡名包含该子串的接口
-# link_mbps = 1000  # 参考链路带宽（Mbps，默认 1000 = 1 Gbps），用于折算
-#                   # sys.net.utilization（链路利用率 %）= 总速率 / 带宽 × 100
-# high_threshold = 80
-
-# --- 示例适配器（需 `--features adapter-example-*`）---
-# [adapters."example.counter"]
-# enabled = true
-# sampling = 200
-# step = 1.5
-#
-# [adapters."example.sine"]
-# enabled = true
-# sampling = 200
-# amplitude = 1.0
-# frequency = 1.0
-
-# --- 远程适配器（M4，外部 adapter = 独立服务；管理面板「连接远程适配器」发起并写回本段）---
-# 外部服务契约：HTTP 生命周期 API（GET /metadata、POST /start、POST /stop、
-# POST /reload-config、GET /status）+ WebSocket 数据面 /stream（推送标准化 Sample JSON）。
-# 连接成功后会写回如下 remote 段，重启自动恢复连接（架构 §14.1）。
-# [adapters."remote.demo"]
-# enabled = true
-# remote = { endpoint = "http://127.0.0.1:9000", token = "optional-token" }
-# # sampling = 1000        # 经 /start config 交给外部服务由其遵守（core 不二次采样）
-
-# --- 动态 UI 插件（M4，ui-plugins 目录）---
-# 把第三方插件 dist 放到 ui-plugins/<plugin-id>/（含 manifest.json + dist/），
-# 启动时扫描并合并进组件目录（架构 §15）；插件经 ui-plugin://<plugin-id>/ 加载，
-# 每插件独立窗口，仅授予其声明 series 的事件与建窗/窗口控制权限。
-
-# --- 窗口集合与布局持久化（M2.2，架构 §13）---
-# [ui].windows = 监控窗口 id 列表（**段缺失** = 首次运行，启动按组件目录播种并写回；
-# **段存在但列表为空** = 已销毁全部监控窗口，保持为空）。
-# [window.<id>] 段：component = 绑定的组件类型 id（组件目录之一），title = 窗口标题覆盖
-# （缺省用组件默认标题），其余为布局字段（position / size 为逻辑像素；
-# monitor 为显示器序列化标识，如 "primary" / 自定义编号）。管理窗口无 component。
-#
-# [ui]
-# windows = ["sys-cpu", "cpu-monitor"]
-#
-# [window."sys-cpu"]
-# component = "sys-cpu"
-# title = "CPU 使用率"
-# position = [120.0, 80.0]
-# size = [520.0, 360.0]
-# monitor = "primary"
-#
-# [window."cpu-monitor"]
-# component = "sys-cpu"        # 多窗口可绑定同一组件
-# title = "客厅大屏 CPU"
-# size = [800.0, 600.0]
+link_mbps = 1000
+high_threshold = 80

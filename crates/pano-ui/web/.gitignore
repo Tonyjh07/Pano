@@ -1,3 +1,0 @@
-# 前端构建产物与依赖（spec §9：前端依赖仅存在于 pano-ui/web/，经 lockfile 管理）
-node_modules/
-dist/

@@ -1,6 +1,25 @@
 # Changelog
 
+## [0.1.0] — C++/Qt 重构（分支 qt-port）
+
+用 **C++17 + Qt6 Widgets** 重写原 Rust/Tauri 实现，对齐原架构与设计决策：
+
+- **core**（`pano-core`）：`IAdapter` 契约、`AdapterRegistry` 工厂注册表、线程安全环形缓冲 `SampleStore`
+  （带 `sampleAppended` 事件订阅）、TOML 子集 `Config`、`Lifecycle`（每适配器 `QTimer` 驱动 `poll()`）；
+- **adapters**（`pano-adapters`）：系统监控 `sys.cpu` / `sys.mem` / `sys.disk` / `sys.net`
+  （Windows API 实现 + 平台条件编译）+ 示例 `example.counter`；
+- **ui**（`pano-ui`）：`ManageWindow`（适配器启停/状态）、`MonitorWindow`（`sys-dashboard` 资源仪表盘）、
+  `GaugeWidget`（QPainter 240° 弧形仪表 + 红区 + 指示灯 + 霓虹辉光 + 紧凑小屏模式）、`TimeSeriesWidget`、
+  `WindowService`（窗口创建/几何持久化）；
+- **app**（`pano-app`）：`QApplication` 装配 + `pano.toml` 配置加载 + `--headless` 冒烟；
+- **tests**（Qt Test）：`test_core`（SampleStore/Config/Registry/Lifecycle）、`test_adapters`（示例一致性 + sys 各
+  适配器 + gauge 几何）、`test_ui`（GaugeGeometry 纯几何 + GaugeWidget 渲染）；ctest 3 项全绿。
+- 已知简化：适配器采样在主线程 QTimer（非后台线程）；`docs/` 为 Rust 时代设计遗产。
+
+---
+
 ## [0.1.0] — M1.x / M2 开发期（未发布）
+
 
 ### M2 系统监控适配器（分支 m1.2，开发中）
 
