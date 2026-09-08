@@ -292,7 +292,8 @@ pano/
   - `focus()` / `show()` / `hide()` —— 可见性；
   - `close()` —— 关闭 = 隐藏（不退出进程，M1.1 语义延续；退出仅经托盘「退出」）。
 - **布局持久化**：窗口关闭 / 退出时记录位置、大小、所在显示器到 `[window.<id>]` 配置段，下次启动恢复；也可由 API / 配置**指定显示器打开**；
-- **无边框（M2.4）**：`WindowSpec.decorations`（组件声明默认，`sys-dashboard` 为 `false` 开箱即用）+ `[window.<id>].decorations`（窗口级覆盖，`persist::apply_layout` 合并，布局记忆刷新时用 `layout_with_geometry` 保留该覆盖）；管理窗口页提供「无边框」开关（`window_set_decorations` 命令 → 窗口服务 + 写回 + 定向 emit 事件）；**内容拖拽移动**：组件在可拖区域声明 `data-pano-drag`（纯 HTML 属性，SysDashboard 整块、窗口壳 header 组件名），窗口壳（ComponentWindow，Tauri 前端）在无边框时于 mousedown 委托 `startDragging`，有边框窗口由系统标题栏负责拖动；
+- **无边框（M2.4）**：`WindowSpec.decorations`（组件声明默认，`sys-dashboard` 为 `false` 开箱即用）+ `[window.<id>].decorations`（窗口级覆盖，`persist::apply_layout` 合并，布局记忆刷新时用 `layout_with_geometry` 保留该覆盖）；管理窗口页提供「无边框」开关（`window_set_decorations` 命令 → 窗口服务 + 写回 + 定向 emit 事件）；**内容拖拽移动**：组件在可拖区域声明 `data-pano-drag`（纯 HTML 属性，SysDashboard 整块、窗口壳 header 组件名），窗口壳（ComponentWindow，Tauri 前端）在无边框时于 mousedown 委托 `startDragging`，有边框窗口由系统标题栏负责拖动；**前端经 `startDragging` 需在 ACL（capabilities）中显式授权 `core:window:allow-start-dragging`**（`core:window:default` 默认不含该权限，缺省时调用被拒、表现为无法拖动）；
+- **小屏初始尺寸（M2.4 修复）**：建窗时若声明尺寸超出目标显示器可用工作区（且无持久化记忆尺寸），按工作区收敛（`persist::fit_size_to_work_area`），保证 400×100 小屏上默认窗口不溢出；用户手动调整过的尺寸（布局记忆）不受影响；
 - **显示器枚举**：`monitors() -> Vec<MonitorInfo>`，`MonitorId` 标识（主显示器 / 次显示器 / 自定义编号）。
 
 依赖方向（M1.2 审查定稿）：

@@ -86,9 +86,10 @@
       if (compact) {
         const gapTotal = 8 * (METRICS.length - 1);
         const byWidth = Math.floor((r.width - gapTotal) / METRICS.length);
-        // 垂直预算：面板 padding(8+6) + 读出行(~16) ≈ 30；表盘高 = size·0.66。
-        // 400×100 小屏：main 内高约 78 → size ≤ (78-30)/0.66 ≈ 72，避免溢出裁切。
-        const byHeight = Math.floor((r.height - 30) / 0.66);
+        // 垂直预算：面板 padding(8+6) + gap(2) + 读出行(~16) ≈ 32；
+        // 表盘高 = size·0.66。400×100 小屏：main 内高约 78 → size ≤
+        // (78-32)/0.66 ≈ 69，避免紧凑表盘底部读数被裁切。
+        const byHeight = Math.floor((r.height - 32) / 0.66);
         compactSize = Math.max(48, Math.min(104, Math.min(byWidth, byHeight)));
       }
     });

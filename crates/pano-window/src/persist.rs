@@ -47,6 +47,15 @@ pub fn layout_from_geometry(geometry: &WindowGeometry) -> WindowLayout {
     }
 }
 
+/// 把窗口初始尺寸限制在目标显示器可用工作区内（M2.4 小分辨率支持）。
+///
+/// 仅当声明尺寸**超出**工作区时缩小（取各维最小值）；不放大、不限制
+/// 用户后续的手动缩放（缩放后的几何由布局记忆持久化，恢复时不再 clamp
+/// ——见 `create_window` 中对 `layout.size` 的判断）。工作区为逻辑像素。
+pub fn fit_size_to_work_area(size: (f64, f64), work_area: (f64, f64)) -> (f64, f64) {
+    (size.0.min(work_area.0), size.1.min(work_area.1))
+}
+
 /// 更新布局记忆时保留窗口级非几何覆盖（M2.4）。
 ///
 /// 位置 / 大小 / 显示器取自最新几何；`decorations` 保留既有持久化覆盖
@@ -258,6 +267,29 @@ mod tests {
         assert_eq!(layout.decorations, Some(false), "覆盖不被几何刷新冲刷");
         // 无既有覆盖 → None（沿用组件声明）
         assert_eq!(layout_with_geometry(None, &geometry).decorations, None);
+    }
+
+    #[test]
+    fn fit_size_to_work_area_clamps_only_when_larger() {
+        // 声明尺寸超出小屏工作区 → 缩到工作区（400×100 小屏场景）
+        assert_eq!(
+            fit_size_to_work_area((860.0, 540.0), (400.0, 100.0)),
+            (400.0, 100.0)
+        );
+        // 已小于工作区 → 保持不变（不放大）
+        assert_eq!(
+            fit_size_to_work_area((320.0, 90.0), (400.0, 100.0)),
+            (320.0, 90.0)
+        );
+        // 单维超出也逐维 clamp
+        assert_eq!(
+            fit_size_to_work_area((860.0, 80.0), (400.0, 100.0)),
+            (400.0, 80.0)
+        );
+        assert_eq!(
+            fit_size_to_work_area((300.0, 540.0), (400.0, 100.0)),
+            (300.0, 100.0)
+        );
     }
 
     /// 无位置 / 无显示器偏好的声明（定位决策测试用）。

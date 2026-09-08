@@ -52,7 +52,16 @@ impl WindowService for TauriWindowService {
         if self.app.get_webview_window(id).is_some() {
             return Err(WindowError::AlreadyExists(id.into()));
         }
-        let merged = persist::apply_layout(spec, layout);
+        let mut merged = persist::apply_layout(spec, layout);
+
+        // M2.4 小分辨率：初始尺寸不超出目标显示器可用工作区。
+        // 仅当本次为「声明尺寸」（无持久化记忆尺寸）时 clamp——用户记忆的
+        // 尺寸反映其有意调整（含跨屏大窗口），不得被覆盖。
+        if layout.and_then(|l| l.size).is_none()
+            && let Ok((w, h)) = target_work_area(&self.app, &merged)
+        {
+            merged.size = persist::fit_size_to_work_area(merged.size, (w, h));
+        }
 
         let mut builder = tauri::webview::WebviewWindowBuilder::new(
             &self.app,
@@ -309,6 +318,22 @@ fn monitor_origin(app: &tauri::AppHandle, id: &MonitorId) -> Result<(f64, f64), 
     let scale = mon.scale_factor();
     let origin = mon.position().to_logical::<f64>(scale);
     Ok((origin.x, origin.y))
+}
+
+/// 目标显示器可用工作区（逻辑像素），用于把初始窗口尺寸限制在屏幕内
+/// （M2.4 小分辨率支持；如 400×100 小屏上 860×540 的默认窗口放不下）。
+///
+/// 目标显示器 = 合并后 spec/layout 指定的显示器；无偏好 → 主显示器。
+/// 显示器不可解析时返回 `Err`，调用方忽略（保持声明尺寸，不硬失败）。
+fn target_work_area(
+    app: &tauri::AppHandle,
+    merged: &WindowSpec,
+) -> Result<(f64, f64), WindowError> {
+    let mon = resolve_monitor(app, &persist::resolve_monitor_id(merged.monitor.as_deref()))?;
+    let scale = mon.scale_factor();
+    let wa = mon.work_area();
+    let logical = wa.size.to_logical::<f64>(scale);
+    Ok((logical.width, logical.height))
 }
 
 /// 物理显示器 → [`MonitorInfo`]。

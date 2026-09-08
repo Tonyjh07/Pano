@@ -33,15 +33,31 @@
   const COMPACT_H = 140;
   let compact = $state(false);
   let unlistenResize: (() => void) | null = null;
+  let unlistenScale: (() => void) | null = null;
 
-  /** 监听窗口高度变化（Tauri 窗口尺寸 API；非 Tauri 环境回落常规模式）。 */
+  /**
+   * 监听窗口高度变化（Tauri 窗口尺寸 API；非 Tauri 环境回落常规模式）。
+   * 注意：`innerSize()` / `onResized` / `onScaleChanged` 的 payload 均为
+   * **物理像素**，而紧凑布局的 CSS 阈值为逻辑像素——高 DPI（缩放 ≠ 100%）
+   * 下必须按 scaleFactor 换算，否则小屏紧凑判定错位（M2.4 修复）。
+   * scaleFactor 随窗口跨显示器拖动变化，用可变闭包并在 onScaleChanged 时
+   * 同步刷新，避免陈旧换算。
+   */
   async function watchHeight() {
     const w = getCurrentWindow();
+    let factor = 1;
     try {
-      const size = await w.innerSize();
-      compact = size.height < COMPACT_H;
+      const updateFrom = (physicalHeight: number) => {
+        compact = physicalHeight / factor < COMPACT_H;
+      };
+      factor = await w.scaleFactor();
+      updateFrom((await w.innerSize()).height);
       unlistenResize = await w.onResized(({ payload }) => {
-        compact = payload.height < COMPACT_H;
+        updateFrom(payload.height);
+      });
+      unlistenScale = await w.onScaleChanged(({ payload }) => {
+        factor = payload.scaleFactor;
+        updateFrom(payload.size.height);
       });
     } catch {
       /* 尺寸不可用 → 常规模式 */
@@ -100,6 +116,7 @@
     unlistenContent?.();
     unlistenDecor?.();
     unlistenResize?.();
+    unlistenScale?.();
   });
 
   /**
