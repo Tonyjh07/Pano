@@ -86,11 +86,12 @@
       if (compact) {
         const gapTotal = 8 * (METRICS.length - 1);
         const byWidth = Math.floor((r.width - gapTotal) / METRICS.length);
-        // 垂直预算：面板 padding(8+6) + gap(2) + 读出行(~16) ≈ 32；
-        // 表盘高 = size·0.66。400×100 小屏：main 内高约 78 → size ≤
-        // (78-32)/0.66 ≈ 69，避免紧凑表盘底部读数被裁切。
-        const byHeight = Math.floor((r.height - 32) / 0.66);
-        compactSize = Math.max(48, Math.min(104, Math.min(byWidth, byHeight)));
+        // 垂直预算（紧凑 Gauge 开销，含 2px 边框）：面板 padding(5+4) + gap(1) +
+        // 读数行(~12) + 边框(2) ≈ 24；表盘高 = size·0.66。125% 缩放（400×100 物理
+        // → 320×80 逻辑）：main 内高约 58 → size ≤ (58-24)/0.66 ≈ 51，紧凑表盘含
+        // 边框完整放下不裁切（M2.4 修复）。
+        const byHeight = Math.floor((r.height - 24) / 0.66);
+        compactSize = Math.max(44, Math.min(104, Math.min(byWidth, byHeight)));
       }
     });
     ro.observe(root);
@@ -115,6 +116,7 @@
         label={compact ? (detail ? `${m.short}·${detail}` : m.short) : m.label}
         size={compact ? compactSize : m.big ? 300 : 220}
         detail={compact ? null : detail}
+        compact={compact}
       />
     </div>
   {/each}

@@ -157,10 +157,10 @@ describe("SysDashboard", () => {
     await tick();
 
     // 紧凑横条布局：仍 4 个表盘，尺寸按宽/高双预算取小
-    // 400 宽 → (400-24)/4=94；80 高 → (80-32)/0.66=72（高度预算主导，防溢出裁切）
+    // 400 宽 → (400-24)/4=94；80 高 → (80-24)/0.66=84（高度预算主导，防溢出裁切）
     expect(container.querySelector(".dashboard.compact")).not.toBeNull();
     expect(container.querySelectorAll(".gauge").length).toBe(4);
-    expect(container.querySelector(".gauge svg")!.getAttribute("width")).toBe("72");
+    expect(container.querySelector(".gauge svg")!.getAttribute("width")).toBe("84");
     // 短标签 + 磁盘最忙盘符拼入标签（紧凑模式无独立 detail 行）
     expect(container.textContent).toContain("磁盘·E:");
     expect(container.querySelector(".detail")).toBeNull();
@@ -172,8 +172,8 @@ describe("SysDashboard", () => {
   });
 
   it("keeps compact gauges within a 400×100 window inner height (M2.4)", async () => {
-    // 400×100 小屏（用户实测场景）：main 内高约 78（窗口 100 − 折叠头部 ~18 − padding 4）。
-    // 高度预算 (78-32)/0.66 ≈ 69，宽预算 (400-24)/4=94 → size=69，紧凑表盘不溢出裁切。
+    // 400×100 小屏（用户实测场景，100% 缩放）：main 内高约 78（窗口 100 − 折叠头部 ~18 − padding 4）。
+    // 高度预算 (78-24)/0.66 ≈ 81，宽预算 (400-24)/4=94 → size=81，紧凑表盘不溢出裁切。
     let cb: ((entries: { contentRect: { width: number; height: number } }[]) => void) | null =
       null;
     class MockResizeObserver {
@@ -201,8 +201,47 @@ describe("SysDashboard", () => {
     await tick();
 
     expect(container.querySelector(".dashboard.compact")).not.toBeNull();
-    // 表盘尺寸受高度预算约束：69 < 宽预算 94，防小屏垂直溢出
-    expect(container.querySelector(".gauge svg")!.getAttribute("width")).toBe("69");
+    // 表盘尺寸受高度预算约束：81 < 宽预算 94，防小屏垂直溢出
+    expect(container.querySelector(".gauge svg")!.getAttribute("width")).toBe("81");
+
+    unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("fits compact gauges on a 400×100 @125% 缩放屏幕（逻辑 320×80）(M2.4)", async () => {
+    // 用户实测：400×100 物理分辨率 + 125% 缩放 → 逻辑 320×80，main 内高约 58
+    // （窗口 80 − 折叠头部 ~18 − padding 4）。紧凑预算 (58-24)/0.66 ≈ 51，
+    // 宽预算 (320-24)/4=74 → size=51，表盘总高 51·0.66+24 ≈ 57.7 ≤ 58 不裁切。
+    let cb: ((entries: { contentRect: { width: number; height: number } }[]) => void) | null =
+      null;
+    class MockResizeObserver {
+      constructor(c: typeof cb) {
+        cb = c;
+      }
+      observe(_el: unknown) {}
+      unobserve(_el: unknown) {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+    const { container, unmount } = render(SysDashboard, {
+      props: {
+        seriesList: SERIES,
+        samples: {},
+        latest: latest({
+          "sys.cpu.usage": 10,
+          "sys.mem.used_percent": 40,
+          "sys.disk.active_percent": 30,
+          "sys.net.utilization": 5,
+        }),
+      },
+    });
+    cb!([{ contentRect: { width: 320, height: 58 } }]);
+    await tick();
+
+    expect(container.querySelector(".dashboard.compact")).not.toBeNull();
+    expect(container.querySelector(".gauge svg")!.getAttribute("width")).toBe("51");
+    // 紧凑 Gauge 开启垂直开销缩减样式（放得下才可能不被裁切）
+    expect(container.querySelector(".gauge.compact")).not.toBeNull();
 
     unmount();
     vi.unstubAllGlobals();

@@ -53,6 +53,19 @@ describe("Gauge", () => {
     expect(container.querySelector(".detail")).toBeNull();
   });
 
+  it("compact mode applies reduced-overhead styles (M2.4 125% 缩放)", () => {
+    const { container } = render(Gauge, {
+      props: { value: 50, threshold: 80, label: "CPU", size: 51, compact: true },
+    });
+    // 紧凑类挂在面板根节点，垂直开销缩减（padding/gap/读数行/指示灯）
+    expect(container.querySelector(".gauge.compact")).not.toBeNull();
+    // 常规模式不误开紧凑样式
+    const { container: normal } = render(Gauge, {
+      props: { value: 50, threshold: 80, label: "CPU", size: 220, compact: false },
+    });
+    expect(normal.querySelector(".gauge.compact")).toBeNull();
+  });
+
   it("draws a 240° arc from -120° to +120° (12 o'clock zero, clockwise, M2.4)", () => {
     const { container } = render(Gauge, {
       props: { value: 0, threshold: 80, label: "x" },
@@ -99,8 +112,8 @@ describe("Gauge", () => {
   });
 
   it("keeps numeric labels inside the viewBox for all sizes (M2.4 B2 回归)", () => {
-    // 标签在刻度内圈（R·0.82）：任何 size（含紧凑 75 / 下限 48）都不越出 viewBox
-    for (const size of [240, 75, 48]) {
+    // 标签在刻度内圈（R·0.75）：任何 size（含紧凑尺寸 / 下限 44）都不越出 viewBox
+    for (const size of [240, 75, 44]) {
       const { container, unmount } = render(Gauge, {
         props: { value: 50, threshold: 80, label: "x", size },
       });

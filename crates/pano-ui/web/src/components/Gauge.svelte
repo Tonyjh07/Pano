@@ -3,13 +3,17 @@
   // 顺时针为正、行程 -120° → +120°，即真实汽车仪表盘几何：0 在 8 点方向、
   // 50 在 12 点顶部、100 在 4 点方向）、红区（阈值→100）、指针 + 尾翼、指示灯。
   // point(v)：φ(v) = -120° + 240°·(v/100)；x = cx + R·sinφ，y = cy − R·cosφ。
-  let { value, threshold, label, size = 240, detail = null }: {
+  let { value, threshold, label, size = 240, detail = null, compact = false }: {
     value: number | null;
     threshold: number;
     label: string;
     size?: number;
     /** 副读数（M2.3.1：磁盘仪表显示最忙盘符，如 `C:`）。 */
     detail?: string | null;
+    /** 紧凑模式（M2.4 修复）：小分辨率横条下缩减垂直开销
+     *  （padding/读数行/间距），让 400×100 @125% 缩放的逻辑窗口
+     *  高度（320×80 → main 内高约 58px）能放下表盘不被裁切。 */
+    compact?: boolean;
   } = $props();
 
   const v = $derived(value === null ? 0 : Math.min(100, Math.max(0, value)));
@@ -87,7 +91,7 @@
   );
 </script>
 
-<div class="gauge" style={`width: ${size}px`}>
+<div class="gauge" class:compact style={`width: ${size}px`}>
   <svg width={size} height={H} viewBox={`0 0 ${size} ${H}`}>
     <!-- 外圈金属边框 -->
     <path d={rim} class="rim" />
@@ -148,6 +152,17 @@
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.04),
       0 6px 18px rgba(0, 0, 0, 0.45);
+  }
+  /* 紧凑模式（小分辨率横条）：缩减垂直开销让 320×80 逻辑窗口（main 内高约 58）
+    也放得下——padding 8+6→5+4、gap 2→1、读数行 13→10px、灯 12→9px，
+    垂直开销从 ~32 降到 ~22，表盘尺寸可自适应更小而不被裁切（M2.4 修复）。 */
+  .gauge.compact {
+    gap: 1px;
+    border-radius: 10px;
+    padding: 5px 0 4px;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.04),
+      0 4px 12px rgba(0, 0, 0, 0.4);
   }
   svg {
     display: block;
@@ -214,11 +229,18 @@
     gap: 6px;
     font-size: 13px;
   }
+  .gauge.compact .readout {
+    gap: 4px;
+    font-size: 10px;
+  }
   .value {
     font-family: var(--mono, monospace);
     font-weight: 600;
     min-width: 42px;
     text-align: right;
+  }
+  .gauge.compact .value {
+    min-width: 34px;
   }
   .detail {
     color: var(--accent, #4f9cf9);
@@ -241,6 +263,10 @@
     background: var(--ok, #3fb950); /* 正常：绿 */
     box-shadow: 0 0 6px var(--ok, #3fb950);
     flex: none;
+  }
+  .gauge.compact .light {
+    width: 9px;
+    height: 9px;
   }
   .light.alarmed {
     background: var(--err, #f85149); /* 超阈值：红 */
