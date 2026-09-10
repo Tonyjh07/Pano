@@ -6,11 +6,13 @@
 import type { Component } from "svelte";
 import TimeSeriesPanel from "./TimeSeriesPanel.svelte";
 import SysDashboard from "./SysDashboard.svelte";
+import DeepSeekBalance from "./DeepSeekBalance.svelte";
 
 // 渲染器 props 各异（通用面板传 seriesList/samples/latest，专用渲染器自定义），
 // 故以宽松组件类型登记，动态分派时按各渲染器实际 props 传参。
 export const renderers: Record<string, Component<any>> = {
   "sys-dashboard": SysDashboard,
+  "deepseek-balance": DeepSeekBalance,
 };
 
 /** 按组件类型 id 解析渲染器；未注册（未知）类型回退到通用渲染。 */

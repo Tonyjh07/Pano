@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased] — M2.5
+
+### M2.5 DeepSeek API 额度监控（分支 dev）
+
+- **远程适配器 `deepseek.balance`**（feature `adapter-deepseek-balance`，**R3 注入首次落地**）：按采样周期轮询 DeepSeek 官方 `GET {base_url}/user/balance`（`Authorization: Bearer <api_key>`）；series = `total` / `granted` / `topped_up` × `cny` / `usd`（Number，按响应实际币种产出）+ `is_available`（Bool）；自定义配置 `api_key`（env `PANO_DEEPSEEK_API_KEY` 优先，回落配置段）/ `base_url` / `low_threshold`（低余额阈值）；复用 `remote/http_poll::poll_loop`（退避重试 + Error 阈值）；pano-app 按 feature 构造 `ReqwestHttpClient` 经 `Lifecycle::with_http` 注入 core。
+- **安全**：`list_adapters` 与 `config_preview` 对密钥类键 `api_key` 读回掩码（`********`），密钥不进 WebView。
+- **UI 组件 `deepseek-balance`（「DeepSeek 额度」）**：专用渲染器 `DeepSeekBalance.svelte`——状态条（账户可用 / **高峰时段 · 价格翻倍**（周一~周五 9:00~12:00、14:00~18:00，本地时间判定）/ 低余额指示灯 / 适配器 Error 提示）+ CNY 主卡（大数字 + 充值/赠送细分 + **近 5 分钟 / 近 30 分钟消耗**）+ USD 副卡 + uPlot 趋势曲线；前端纯函数 `isPeakHour` / `consumptionInWindow` + Vitest。
+- **测试**：loopback 假 DeepSeek 服务（`std::net::TcpListener`，零新增依赖）一致性测试 + 单元测试（JSON 解析 / 配置校验含 env 回落）；前端 Vitest 62 例全绿；`cargo fmt` / `clippy -D warnings` / `cargo test` / `svelte-check` / `vite build` 门禁通过。
+
 ## [0.2.0] — M2.1 ~ M2.4 窗口管理与汽车仪表盘（`tag v0.2.0`）
 
 ### M2.4 UI 升级：汽车仪表盘 + 小屏自适应 + 无边框拖拽（分支 m2.2）

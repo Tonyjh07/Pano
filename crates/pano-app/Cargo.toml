@@ -17,6 +17,8 @@ adapter-sys-disk = ["pano-adapters/adapter-sys-disk"]
 adapter-sys-net = ["pano-adapters/adapter-sys-net"]
 adapter-example-counter = ["pano-adapters/adapter-example-counter"]
 adapter-example-sine = ["pano-adapters/adapter-example-sine"]
+# DeepSeek API 额度监控（M2.5）：远程适配器，需在装配层注入 HttpClient（R3）
+adapter-deepseek-balance = ["pano-adapters/adapter-deepseek-balance"]
 
 [dependencies]
 pano-core.workspace = true

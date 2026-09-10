@@ -500,12 +500,53 @@ pub fn monitors(state: State<'_, AppState>) -> Result<Vec<MonitorDto>, String> {
 }
 
 /// 当前配置文本（设置页查看 pano.toml 用）。
+///
+/// M2.5 安全点：`[adapters.*]` 段内的密钥类键（如 `api_key`）读回前端一律
+/// 掩码——与 `list_adapters` 的 [`crate::dto::MASKED_CONFIG_KEYS`] 同一安全
+/// 承诺（密钥不进 WebView；`pano.toml` 仍存明文供适配器使用）。
 #[tauri::command]
 pub fn config_preview(state: State<'_, AppState>) -> Result<String, String> {
     let lc = state.lifecycle();
-    lc.config()
+    let toml_text = lc
+        .config()
         .to_toml()
-        .map_err(|e| format!("配置序列化失败：{e}"))
+        .map_err(|e| format!("配置序列化失败：{e}"))?;
+    Ok(mask_secret_lines(&toml_text))
+}
+
+/// 对 pano.toml 文本做密钥类行掩码：仅掩码 `[adapters.*]` 段内的
+/// `api_key = "…"` 赋值行（`to_toml` 序列化格式），其余段落原样保留。
+fn mask_secret_lines(toml_text: &str) -> String {
+    let mut in_adapter_section = false;
+    let mut out = String::with_capacity(toml_text.len());
+    for line in toml_text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            // 段头（含 `[adapters."deepseek.balance"]` 引号形式）
+            in_adapter_section = trimmed.starts_with("[adapters");
+            out.push_str(line);
+        } else if in_adapter_section && is_secret_key_line(trimmed) {
+            out.push_str(&mask_secret_value(line));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// 行是否为密钥类键赋值（`api_key = …`；to_toml 序列化固定带空格）。
+fn is_secret_key_line(trimmed: &str) -> bool {
+    trimmed.starts_with("api_key =") || trimmed.starts_with("api_key=")
+}
+
+/// 掩码 `key = value` 行的值部分：保留键与等号，值替换为掩码串。
+fn mask_secret_value(line: &str) -> String {
+    match line.find('=') {
+        // `line[..=pos]` 形如 `api_key =`；trim_end 去掉尾部空格后补 ` "********"`
+        Some(pos) => format!("{} \"********\"", line[..=pos].trim_end()),
+        None => line.to_string(),
+    }
 }
 
 /// 配置 schema 版本（设置页展示）。
@@ -700,6 +741,50 @@ mod tests {
         let only_cpu: std::collections::HashSet<&str> = ["sys.cpu"].into_iter().collect();
         assert!(component_available(cpu, |a| only_cpu.contains(a.as_str())));
         assert!(!component_available(net, |a| only_cpu.contains(a.as_str())));
+    }
+
+    #[test]
+    fn mask_secret_lines_masks_api_key_in_adapters_section_only() {
+        // M2.5 安全点：config_preview 读回前端时掩码 api_key（不进 WebView）
+        let toml = r#"schema_version = 1
+
+[core]
+sampling_ms = 500
+
+[adapters."sys.cpu"]
+enabled = true
+sampling = 500
+
+[adapters."deepseek.balance"]
+enabled = true
+sampling = 60000
+api_key = "sk-secret"
+base_url = "https://api.deepseek.com"
+
+[window.manager]
+title = "Pano 管理"
+"#;
+        let masked = mask_secret_lines(toml);
+        assert!(
+            masked.contains(r#"api_key = "********""#),
+            "api_key 值应被掩码"
+        );
+        assert!(!masked.contains("sk-secret"), "明文密钥不得出现在预览中");
+        // 非 adapters 段的键、非密钥键不受影响
+        assert!(masked.contains("sampling_ms = 500"));
+        assert!(masked.contains(r#"title = "Pano 管理""#));
+        assert!(masked.contains("base_url = \"https://api.deepseek.com\""));
+    }
+
+    #[test]
+    fn mask_secret_lines_leaves_non_secret_adapter_keys_untouched() {
+        let toml = r#"[adapters."sys.net"]
+enabled = true
+link_mbps = 1000
+"#;
+        let masked = mask_secret_lines(toml);
+        assert!(masked.contains("enabled = true"));
+        assert!(masked.contains("link_mbps = 1000"));
     }
 
     #[test]

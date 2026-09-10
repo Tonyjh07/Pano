@@ -41,6 +41,13 @@ pub struct ConfigValueDto {
     pub value: serde_json::Value,
 }
 
+/// 掩码显示值（密钥类配置读回前端时替换）。
+const MASKED_SECRET: &str = "********";
+
+/// 密钥类自定义配置键：经 `list_adapters` 读回前端一律掩码，避免密钥下发进
+/// WebView（M2.5 安全点；`pano.toml` 仍存明文供适配器使用）。
+pub const MASKED_CONFIG_KEYS: &[&str] = &["api_key"];
+
 /// 配置表单字段（由 `config_schema` 驱动渲染，前端不硬编码适配器参数）。
 #[derive(Debug, Clone, Serialize)]
 pub struct FieldInfo {
@@ -174,10 +181,13 @@ impl AdapterInfo {
 
 impl From<(String, ConfigValue)> for ConfigValueDto {
     fn from((key, value): (String, ConfigValue)) -> Self {
-        Self {
-            key,
-            value: config_value_to_json(&value),
-        }
+        // M2.5：密钥类配置（如 api_key）读回前端一律掩码，不进 WebView
+        let value = if MASKED_CONFIG_KEYS.contains(&key.as_str()) {
+            serde_json::Value::String(MASKED_SECRET.to_string())
+        } else {
+            config_value_to_json(&value)
+        };
+        Self { key, value }
     }
 }
 
@@ -350,6 +360,22 @@ mod tests {
 
         let flag = ConfigValueDto::from(("swap".to_string(), ConfigValue::Bool(true)));
         assert_eq!(flag.value, serde_json::json!(true));
+    }
+
+    #[test]
+    fn secret_config_keys_are_masked_on_readback() {
+        // M2.5 安全点：api_key 等密钥类配置读回前端一律掩码（不进 WebView），
+        // 非密钥字段不受影响。
+        let secret =
+            ConfigValueDto::from(("api_key".to_string(), ConfigValue::Text("sk-abc".into())));
+        assert_eq!(secret.key, "api_key");
+        assert_eq!(secret.value, serde_json::json!("********"));
+
+        let normal = ConfigValueDto::from((
+            "base_url".to_string(),
+            ConfigValue::Text("https://x".into()),
+        ));
+        assert_eq!(normal.value, serde_json::json!("https://x"));
     }
 
     #[test]

@@ -23,6 +23,9 @@ mod example_counter;
 #[cfg(feature = "adapter-example-sine")]
 mod example_sine;
 
+#[cfg(feature = "adapter-deepseek-balance")]
+mod deepseek_balance;
+
 use pano_core::adapter::Adapter;
 
 /// 按已启用的 feature 构建全部适配器实例。
@@ -59,6 +62,9 @@ pub fn build() -> Vec<Box<dyn Adapter>> {
 
     #[cfg(feature = "adapter-example-sine")]
     adapters.push(Box::new(example_sine::ExampleSine::new()));
+
+    #[cfg(feature = "adapter-deepseek-balance")]
+    adapters.push(Box::new(deepseek_balance::DeepSeekBalance::new()));
 
     adapters
 }

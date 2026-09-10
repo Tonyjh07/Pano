@@ -179,6 +179,8 @@ pub struct WindowSpec {
 - `sys.net.utilization`（链路利用率）=（recv_bps + sent_bps）/（参考带宽）× 100（钳 0..=100），参考带宽 `link_mbps` 可配（默认 1000 Mbps）；
 - `high_threshold`（四个 sys 适配器通用配置，Number 默认 80，域 0..=100）：**高占用阈值**，供仪表盘指示灯判定。属「适配器自定义字段」：适配器自身不使用，仅作为数据源配置暴露；UI 经 `list_adapters` 返回的 `config`（当前自定义配置值）读取，未配置回落默认。
 
+**远程适配器 `deepseek.balance`（M2.5，R3 注入首次落地）**：DeepSeek API 额度监控——`GET {base_url}/user/balance`（`Authorization: Bearer <api_key>`；响应 `balance_infos[]` 金额为字符串，按币种 CNY / USD 分项，`total = granted + topped_up`）。series 按响应实际币种产出（`total_cny` / `granted_cny` / `topped_up_cny` / `total_usd` / `granted_usd` / `topped_up_usd`，Number）+ `is_available`（Bool）；自定义配置 `api_key`（**env `PANO_DEEPSEEK_API_KEY` 优先**，回落配置段）、`base_url`（默认 `https://api.deepseek.com`）、`low_threshold`（低余额阈值，仿 `high_threshold` 仅作 UI 判定数据源）。数据路径复用 §14 的 `HttpClient` 注入 + `remote/http_poll::poll_loop`（退避重试 + Error 阈值）；**pano-app 首次装配注入**：feature `adapter-deepseek-balance` 下构造 `ReqwestHttpClient` 经 `Lifecycle::with_http` 注入（§14「预留落点」落地）。
+
 - **管理窗口**（1 个）不属于 `components`：由 pano-app 固定创建（内含适配器管理页 + 设置页），是 pano-ui 内置的固定窗口；
 - **首次播种时机**：仅当组件的 `series` 存在数据源（对应适配器**已启用**）时才按目录播种组件窗口；无数据源组件不播种（在「窗口管理」页提示）。**用户新建窗口**可绑定已注册但未启用的组件（窗口内显示空态），仅对应适配器**未注册**（feature 未编译）的组件不可选；
 - `WindowSpec.monitor` 在 core 侧为**字符串序列化形式**（`Option<String>`），由 pano-ui / pano-window 侧解析为 `MonitorId`（`MonitorId` 类型定义在 pano-window，属窗口领域，core 不引用）；布局持久化的 `[window.<id>]` 段同样存序列化形式。
@@ -352,6 +354,11 @@ pub struct AdapterContext {
 - `Adapter` trait 与既有适配器零改动；新远程适配器只需在 `start` 里使用注入的 `HttpClient`（或自建连接）即可；
 - core 的依赖面不膨胀（抽象在 core，实现与具体依赖在 adapters / pano-app 装配层）；
 - 生命周期契约不变：`stop` 返回后不得再产出样本（WS 型需在 stop 中关闭连接并 join 接收任务）。
+
+> **M2.5 落地**：`deepseek.balance`（DeepSeek API 额度监控）是首个复用本预留的具体远程
+> 适配器——pano-app 在 `adapter-deepseek-balance` feature 下构造 `ReqwestHttpClient`
+> 注入 core（`Lifecycle::with_http`），适配器经 `AdapterContext.http` +
+> `remote/http_poll::poll_loop` 轮询（series / 配置见 §7）。
 
 ### 14.1 远程适配器服务端协议（M4，外部服务 = 独立进程）
 

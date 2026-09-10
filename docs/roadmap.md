@@ -162,6 +162,41 @@
 
 **验收**：`cargo tauri dev` 后在「窗口管理」新建窗口绑定「资源仪表盘」（或删除 pano.toml 中的 `[ui]` / `[window.<id>]` 段——段缺失 = 首次运行，触发按目录播种并写回）；四个仪表实时反映占用，任一指标超阈值其指示灯变红；**磁盘仪表显示当前最忙盘符（如 `C:`）与活动率，空闲时活动率低、不恒满**。
 
+## M2.5 —— DeepSeek API 额度监控（用户新需求）
+
+**设计**：新增远程适配器 `deepseek.balance`（**R3 注入首次落地**，架构 §14 / §7）+ 专用 UI 组件 `deepseek-balance`（「DeepSeek 额度」）。数据源 = DeepSeek 官方 `GET {base_url}/user/balance`（`Authorization: Bearer <api_key>`），响应 `{ is_available, balance_infos: [{ currency, total_balance, granted_balance, topped_up_balance }] }`——金额为**字符串**（如 `"110.00"`），数组按币种（CNY / USD）分项，`total = granted(赠送) + topped_up(充值)`。
+
+**适配器**（feature `adapter-deepseek-balance`，模块 `deepseek_balance.rs`）：
+
+- 能力 `TimeSeries` + `RemoteSource`（管理页显示「远程数据源」标签）；
+- 数据路径 = `AdapterContext.http` 注入的 `ReqwestHttpClient` + `remote::http_poll::poll_loop`（core 级退避重试 + Error 阈值，架构 §9）；`start` 时 `http` 为 `None` → `AdapterError::NotAvailable`；
+- series（按响应实际币种产出，未知币种 warn 跳过）：`total_cny` / `granted_cny` / `topped_up_cny` / `total_usd` / `granted_usd` / `topped_up_usd`（Number）+ `is_available`（Bool）；
+- 自定义配置：`api_key`（**env `PANO_DEEPSEEK_API_KEY` 优先**，回落配置段；两者皆无 → `AdapterError::Config`）、`base_url`（默认 `https://api.deepseek.com`）、`low_threshold`（默认 20，域 0..=10000，**低余额阈值**——仿 `high_threshold` 模式仅作 UI 判定数据源，适配器自身不使用）；
+- 建议采样 60s（`sampling = 60000`，`pano.toml.example` 已推荐：余额变化慢 + 减少对官方端点的请求；适配器不强制，未配置时走 `[core].sampling_ms`）；
+- **R3 注入首次落地**：pano-app 在 `adapter-deepseek-balance` feature 下构造 `ReqwestHttpClient` 并经 `Lifecycle::with_http` 注入（其余分支保持 http=None，零影响）。
+
+**UI**（`deepseek-balance`「DeepSeek 额度」，专用渲染器 `DeepSeekBalance.svelte`）：
+
+- 状态条：`is_available` 徽标（绿/红）+ **高峰时段徽标**（周一~周五 9:00~12:00 / 14:00~18:00 = 高峰，**价格翻倍**，本地时间判定；其余空闲）+ 低余额指示灯（`total_cny < low_threshold` → 红）+ 适配器 Error 提示（last_error）；
+- CNY 主卡：大数字 ¥total + 充值/赠送细分 + **近 5 分钟 / 近 30 分钟消耗**徽标（由 `total_cny` 样本差分计算）；USD 副卡（series 存在时显示）；uPlot 趋势曲线（`total_cny` 最近 300 点）；
+- 空态：无数据不显示 0 误导（沿用 ui.md §7 约定）；
+- 前端纯函数 `isPeakHour` / `consumptionInWindow`（`src/lib/deepseek.ts`）+ Vitest。
+
+**安全**：`list_adapters` 对自定义配置键 `api_key` 读回**掩码**（`********`，dto.rs `MASKED_CONFIG_KEYS`），密钥不进 WebView；`pano.toml` 明文存储（本地应用已知取舍，与 M4 remote `token` 一致）。
+
+**测试**：
+
+- 单元：余额 JSON 解析（字符串金额→f64、缺币种/空数组、字段缺省容错）、配置校验（env 优先/回落、api_key 缺失、base_url / low_threshold 非法）；
+- 一致性（远程型例外，spec §10）：`run_all` 固定 `http: None` 不适用 → 测试模块内置 **loopback 假 DeepSeek 服务**（`std::net::TcpListener` 线程响应固定 JSON，零新增依赖），注入 `ReqwestHttpClient` 跑一致性流程：start → 样本到达 → 采样周期容差 → stop 后无样本 → 非法配置拒绝（用 `low_threshold` 越界作确定性非法配置，不依赖环境变量）；
+- 前端：`isPeakHour`（边界：9:00 / 12:00 / 13:59 / 14:00 / 18:00 / 周末）与 `consumptionInWindow`（窗口差分 / 数据不足 / 充值回升记 0）纯函数 Vitest + `DeepSeekBalance` 挂载测试（空态 / 低余额红灯 / 高峰徽标）。
+
+**实现说明 / 遗留**：
+
+- **实机验证清单**（web_search 工具不可用期间无法联网核对，实测确认）：① Bearer 头格式（`Authorization: Bearer <key>`，按官方标准实现）；② 实际返回币种与金额字符串格式；③ `/user/balance` 频率限制（默认 60s 规避 429）；④ 401/403 响应形态（经 `HttpError::Status` 映射 `Error{last_error}` + 退避重试）；⑤ 余额字段缺省 / 为空的健壮性（Option + warn 跳过）；
+- 余额上升（期间充值）时「近 N 分钟消耗」记 0 并标注「期间充值」；消耗窗口依赖前端每 series 500 点缓冲（60s 采样下覆盖约 8 小时，30 分钟窗口仅需 30 点）；
+- 高峰时段判定使用**本地时区**；边界 12:00 / 18:00 归空闲；
+- 后续增强：消费速率与额度用尽时间估算；`api_key` 管理页热编辑（M3 范围）；USD 消耗统计（本期仅 CNY 主卡）。
+
 ## M3 —— 增强与打磨
 
 - 配置热重载完善（自定义参数变更 + 回滚机制）；

@@ -7,6 +7,7 @@ vi.mock("./TimeSeriesPanel.svelte", () => ({ default: { __mock: true } }));
 import { renderers, resolveRenderer } from "./renderers";
 import TimeSeriesPanel from "./TimeSeriesPanel.svelte";
 import SysDashboard from "./SysDashboard.svelte";
+import DeepSeekBalance from "./DeepSeekBalance.svelte";
 
 describe("renderers", () => {
   it("unregistered component id falls back to generic TimeSeriesPanel", () => {
@@ -22,6 +23,11 @@ describe("renderers", () => {
   it("sys-dashboard dispatches to the dedicated SysDashboard renderer", () => {
     expect(resolveRenderer("sys-dashboard")).toBe(SysDashboard);
     expect(renderers["sys-dashboard"]).toBe(SysDashboard);
+  });
+
+  it("deepseek-balance dispatches to the dedicated DeepSeekBalance renderer (M2.5)", () => {
+    expect(resolveRenderer("deepseek-balance")).toBe(DeepSeekBalance);
+    expect(renderers["deepseek-balance"]).toBe(DeepSeekBalance);
   });
 
   it("registered renderer is dispatched by component id", () => {

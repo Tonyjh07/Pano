@@ -124,6 +124,7 @@
   2. 采样周期正确（容差内）；
   3. 非法配置返回 `AdapterError::Config`。
   - **远程适配器宿主（M4）例外**：样本经 WS 异步推送，「采样周期正确」判定不适用——以「首样本到达 + stop 后无样本」判定（architecture §14.1，loopback 假外部服务）。
+  - **HTTP 轮询型远程适配器（M2.5 起，如 `deepseek.balance`）例外**：`run_all` 测试基座固定注入 `http: None`，不适用于经注入 `HttpClient` 轮询的适配器——改以「测试内置 loopback 假服务（零新增依赖）+ 注入 reqwest 客户端」跑同等三项检查（生命周期 / 采样周期容差 / 非法配置拒绝），并共用「stop 后无样本」判定。
 - UI 测试：前端单测（Vitest，组件渲染与交互）+ Tauri 命令层单测（Rust）；端到端（Playwright / tauri-driver）M2 起视需要引入。
 - 门禁：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`（M2 起接入 CI）。
 

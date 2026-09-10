@@ -44,6 +44,18 @@ sampling = 1000
 #                   # sys.net.utilization（链路利用率 %）= 总速率 / 带宽 × 100
 # high_threshold = 80
 
+# --- DeepSeek API 额度监控（M2.5；需 `--features adapter-deepseek-balance`）---
+# 数据源：GET {base_url}/user/balance（Authorization: Bearer <api_key>）。
+# api_key 也可经环境变量 PANO_DEEPSEEK_API_KEY 提供（**优先级高于**本段 api_key 字段）；
+# 两者皆无时适配器启动报配置错误。存本文件为明文属已知取舍（本地应用，与 M4 remote
+# token 一致）；管理页读回时掩码显示，密钥不进 WebView。
+# [adapters."deepseek.balance"]
+# enabled = true
+# sampling = 60000          # 60s（余额变化慢；避免频繁请求官方端点）
+# api_key = "sk-xxxxxxxx"
+# # base_url = "https://api.deepseek.com"   # 服务基址（测试可指向本地 mock）
+# low_threshold = 20        # 低余额阈值（¥，默认 20，0..=10000）：额度窗口指示灯据此亮红
+
 # --- 示例适配器（需 `--features adapter-example-*`）---
 # [adapters."example.counter"]
 # enabled = true

@@ -73,8 +73,19 @@ fn main() -> Result<()> {
         .with_context(|| format!("读取配置失败：{}", config_path.display()))?;
     let config = PanoConfig::parse(&text).context("解析配置失败")?;
 
-    // 3. 组装 core（M1.2 无远程适配器，HttpClient 注入为 None；远程源 M2 装配）
-    let lifecycle = Lifecycle::new(registry, config, rt.handle().clone())
+    // 3. 组装 core（远程适配器注入 HttpClient，架构 §14 / roadmap M2.5）：
+    //    `adapter-deepseek-balance` 等远程适配器需要注入的 HTTP 客户端
+    //    （R3 预留首次落地，pano-app 装配层按 feature 构造）；其余分支保持
+    //    http=None，行为与既有版本一致。
+    #[cfg(feature = "adapter-deepseek-balance")]
+    let http: Option<Arc<dyn pano_core::http::HttpClient>> = Some(Arc::new(
+        pano_adapters::remote::http_poll::ReqwestHttpClient::new()
+            .context("创建 HTTP 客户端失败（adapter-deepseek-balance）")?,
+    ));
+    #[cfg(not(feature = "adapter-deepseek-balance"))]
+    let http: Option<Arc<dyn pano_core::http::HttpClient>> = None;
+
+    let lifecycle = Lifecycle::with_http(registry, config, rt.handle().clone(), http)
         .context("组装 core 失败（配置引用了未注册的适配器？）")?;
 
     if cli.headless {

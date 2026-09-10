@@ -109,6 +109,27 @@ pub fn uispec() -> UISpec {
                     ..WindowSpec::default()
                 },
             },
+            // DeepSeek 额度（M2.5）：专用渲染器 DeepSeekBalance.svelte，数据源 =
+            // 远程适配器 deepseek.balance（DeepSeek API 余额）。默认 feature 下
+            // 适配器未注册 → 目录中置灰不可选（需 --features adapter-deepseek-balance）。
+            ComponentSpec {
+                id: "deepseek-balance".into(),
+                name: "DeepSeek 额度".into(),
+                series: vec![
+                    SeriesId::new(&AdapterId::new("deepseek.balance"), "total_cny"),
+                    SeriesId::new(&AdapterId::new("deepseek.balance"), "granted_cny"),
+                    SeriesId::new(&AdapterId::new("deepseek.balance"), "topped_up_cny"),
+                    SeriesId::new(&AdapterId::new("deepseek.balance"), "total_usd"),
+                    SeriesId::new(&AdapterId::new("deepseek.balance"), "granted_usd"),
+                    SeriesId::new(&AdapterId::new("deepseek.balance"), "topped_up_usd"),
+                    SeriesId::new(&AdapterId::new("deepseek.balance"), "is_available"),
+                ],
+                window: WindowSpec {
+                    title: "DeepSeek 额度".into(),
+                    size: (520.0, 420.0),
+                    ..WindowSpec::default()
+                },
+            },
         ],
     }
 }

@@ -20,6 +20,9 @@ adapter-sys-disk = ["dep:sysinfo", "dep:windows-sys"]
 adapter-sys-net = ["dep:sysinfo"]
 adapter-example-counter = []
 adapter-example-sine = []
+# DeepSeek API 额度监控（M2.5）：远程适配器，复用 remote-http 基座（R3 注入，
+# 架构 §14 / roadmap M2.5）；serde + serde_json 用于解析余额响应。
+adapter-deepseek-balance = ["remote-http", "dep:serde", "dep:serde_json"]
 # 远程数据源共享基座（M1.2 R3 预留，架构 §14）；具体远程适配器（M2）
 remote = ["remote-http", "remote-ws"]
 remote-http = ["dep:reqwest"]
@@ -30,6 +33,7 @@ pano-core.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 serde_json = { version = "1", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network"], optional = true }
 reqwest = { version = "0.12", optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
