@@ -2488,7 +2488,7 @@ dependencies = [
 
 [[package]]
 name = "pano-adapters"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "pano-core",
@@ -2503,7 +2503,7 @@ dependencies = [
 
 [[package]]
 name = "pano-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2520,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "pano-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2532,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "pano-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pano-core",
  "pano-window",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "pano-window"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pano-core",
  "tauri",

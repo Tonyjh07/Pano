@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.2.0] — M2.1 ~ M2.4 窗口管理与汽车仪表盘（`tag v0.2.0`）
+
+### M2.4 UI 升级：汽车仪表盘 + 小屏自适应 + 无边框拖拽（分支 m2.2）
+
+- **专用渲染器 `sys-dashboard`**：`SysDashboard.svelte` 汽车仪表盘式布局——上方两个大仪表（CPU / 内存占用率）、下方两个小仪表（磁盘活动率 / 网络利用率）；SVG **240° 弧形表盘**（12 点位为 0°、顺时针为正、行程 -120° → +120°，0 在 8 点 / 50 在 12 点顶部 / 100 在 4 点），含外圈金属边框、长短刻度、0/25/50/75/100 标签、红区（阈值→100）、指针 + 尾翼、中心 hub、霓虹辉光、指示灯（超 `high_threshold` 亮红）；组件名印于表盘内。
+- **小分辨率自适应（动态适配）**：`ResizeObserver` 实时测量容器，**布局随可用空间推导、无硬编码尺寸**——高度 ≥120px 常规 2×2（大/小表盘比例 1:0.73 按宽高缩放，上限 300）；<120px 紧凑（按宽高比定列数：宽横屏 4 列一排 / 近方 2×2，表盘 = `min(列宽, 行高预算)`）；极端矮（<50px）隐藏读数行只留表盘。支持 **400×100 小屏（含 Windows 125% 缩放 → 逻辑 320×80）**。
+- **修复（用户实测三轮回归）**：① 无边框窗口无法拖动——capabilities 增 `core:window:allow-start-dragging`（`core:window:default` 默认不含）；② 小屏仍不适配——建窗按目标显示器工作区收敛尺寸（`fit_size_to_work_area`）+ 窗口尺寸物理/逻辑像素按 scaleFactor 换算；③ 125% 缩放下紧凑表盘垂直裁切——`Gauge` 紧凑样式缩减垂直开销；④ 紧凑布局不触发的根因——`ComponentWindow` 的 `main` 设 `min-height:0`（flex 子项默认 `min-height:auto` 会把容器撑开，RO 测到的是内容高度而非可视高度）。
+- **无边框窗口 + 内容拖拽**：`WindowSpec.decorations`（组件声明，`sys-dashboard` 默认无边框）+ `[window.<id>].decorations` 窗口级覆盖；「窗口管理」页无边框开关（`window_set_decorations`：即时切换 + 写回 + 定向 emit）；无边框窗口内容区（`data-pano-drag` + 壳 header）mousedown 委托 `startDragging` 移动窗口，组件只声明标记、平台调用收敛在窗口壳。
+- **`Gauge` 可复用组件**：`compact` prop（紧凑样式缩减垂直开销）+ `readout` 开关（极端矮隐藏读数行）。
+
+### M2.3.1 磁盘仪表显示最忙盘符（分支 m2.2）
+
+- **`sys.disk` 活动率改为最忙盘真实忙碌时间**：Windows 用 PDH `%DiskTime` 取最忙盘，产出 `busiest_disk`（盘符）与 `active_percent`（活动率）。
+- **`sys-dashboard` 订阅 `sys.disk.busiest_disk`**：磁盘仪表显示当前最忙盘符与活动率（`Gauge` 副读数 `detail` 行）；非文本 / 缺失回落。
+
+### M2.3 汽车仪表盘式资源监控（分支 m2.2）
+
+- **数据源扩展**：`sys.disk` 新增磁盘活动率、`sys.net` 新增链路利用率 series；适配器自定义配置 `high_threshold`（高占用阈值，默认 80，`sys.net` 另加 `link_mbps` 参考带宽）。
+- **UI 命令层下发适配器自定义配置**：`list_adapters` 返回 `config` 字段，前端 `configNumber` 读取阈值。
+- **`sys-dashboard` 目录项 + 专用渲染器**：注册 `sys-dashboard` 组件，`renderers.ts` 分派 `SysDashboard.svelte`；前端测试与 vitest Svelte 5 挂载修复（`test/setup.ts` matchMedia stub）。
+
+### M2.2 UI 组件化（分支 m2.2）
+
+- **组件数据模型**：`ComponentSpec.name` 命名组件；`[ui].windows` 持久化监控窗口 id 列表；`[window.<id>].component` / `title` 绑定组件与标题覆盖；首次运行按目录播种默认监控窗口。
+- **组件命令层与前端**：组件目录 / 窗口绑定与切换 / 渲染分派（`renderers.ts` 按组件 id 选渲染器，通用渲染 = 数值卡 + uPlot 曲线 `TimeSeriesPanel.svelte`）+ 窗口集合持久化装配。
+
+### M2.1 窗口管理（分支 dev，M2 后追加）
+
+- **窗口管理核心 API**：`Adapter::series` 扩展、`WindowService::destroy` / `is_visible`。
+- **运行时注册表 + 命令层 + 托盘动态窗口列表 + 前端窗口页签**：窗口管理页可新建 / 切换 / 关闭组件窗口，托盘同步动态列表。
+
+### M2 修复与流程
+
+- 适配器 `stop` 在 tokio 运行时内不再 panic（启用 / 停用热生效路径）；配置文件路径从 cwd 逐级向上解析，修复 `cargo tauri dev` 启动失败；`sys_dashboard` 目录测试编译修复。
+
 ## [0.1.0] — M1.x / M2 开发期（未发布）
 
 ### M2 系统监控适配器（分支 m1.2，开发中）
