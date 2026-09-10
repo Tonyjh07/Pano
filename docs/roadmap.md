@@ -156,7 +156,7 @@
 - 每个仪表下方一个**指示灯**：该指标占用率超其适配器 `high_threshold`（缺省 80）→ 亮红，否则绿色；
 - 数据取自通用窗口管道（ComponentWindow 传 seriesList / samples / latest），仪表显示 `latest` 瞬时值；`Gauge.svelte` 为可复用 SVG 汽车仪表盘（参数化大小 / 阈值 / 红区 / 副读数 detail）。
 
-**小分辨率自适应（M2.4 追加）**：目标场景 **400×100 小屏（含 125% 缩放 → 逻辑 320×80）**。`SysDashboard` 以 `ResizeObserver` 观察容器高度，< 120px 切换**紧凑横条布局**（四表盘横排、尺寸按宽/高双预算取小 `min((宽-间隙)/4, (容器高-24)/0.66)` 并 clamp 44..104、短标签、磁盘盘符拼入标签、组件名印于表盘内省去独立标签行、`Gauge` 紧凑样式缩减垂直开销）；`ComponentWindow` 监听窗口尺寸（`innerSize` + `onResized`，物理像素按 scaleFactor 换算为逻辑像素），窗口高 < 140px 折叠头部控件与内容区 padding，把高度让给仪表；两层阈值配合保证 h<100 场景必命中紧凑布局。
+**小分辨率自适应（M2.4 动态适配）**：目标场景 **400×100 小屏（含 125% 缩放 → 逻辑 320×80）**。`SysDashboard` 以 `ResizeObserver` 观察容器高度（`ComponentWindow` 的 `main` 设 `min-height:0` 让容器收缩到可视高度，修复小屏紧凑布局不触发的根因），**布局随可用空间推导、无硬编码尺寸**：≥120px → 常规 2×2（大/小表盘比例 1:0.73 按宽高缩放，上限 300）；<120px → 紧凑（按宽高比定列数 4/2，表盘 = `min(列宽, (容器高-开销)/0.66)`）；极端矮隐藏读数行；短标签、磁盘盘符拼入标签、组件名印于表盘内省去独立标签行、`Gauge` 紧凑样式 + `readout` 开关缩减垂直开销）；`ComponentWindow` 监听窗口尺寸（`innerSize` + `onResized`，物理像素按 scaleFactor 换算为逻辑像素），窗口高 < 140px 折叠头部控件与内容区 padding，把高度让给仪表；两层阈值配合保证 h<100 场景必命中紧凑布局。
 
 **无边框窗口 + 内容拖拽（M2.4 追加）**：`WindowSpec` 增 `decorations`（默认 true，零破坏）；`sys-dashboard` 组件声明 `false`（小屏开箱即用）；`[window.<id>].decorations` 为**窗口级覆盖**（`WindowLayout.decorations: Option<bool>`，布局记忆刷新用 `layout_with_geometry` 保留覆盖，向后兼容旧配置）；「窗口管理」页提供**无边框开关**（`window_set_decorations` 命令：窗口服务即时切换 + 写回 + 定向 emit `pano://window-decorations`）；无边框窗口内容区（组件声明 `data-pano-drag` 区域 + 壳 header）**鼠标拖动直接移动窗口**（窗口壳 mousedown 委托 `startDragging`；组件只声明标记，平台调用收敛在壳）。
 

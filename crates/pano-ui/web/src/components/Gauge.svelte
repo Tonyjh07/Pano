@@ -3,7 +3,7 @@
   // 顺时针为正、行程 -120° → +120°，即真实汽车仪表盘几何：0 在 8 点方向、
   // 50 在 12 点顶部、100 在 4 点方向）、红区（阈值→100）、指针 + 尾翼、指示灯。
   // point(v)：φ(v) = -120° + 240°·(v/100)；x = cx + R·sinφ，y = cy − R·cosφ。
-  let { value, threshold, label, size = 240, detail = null, compact = false }: {
+  let { value, threshold, label, size = 240, detail = null, compact = false, readout = true }: {
     value: number | null;
     threshold: number;
     label: string;
@@ -14,6 +14,9 @@
      *  （padding/读数行/间距），让 400×100 @125% 缩放的逻辑窗口
      *  高度（320×80 → main 内高约 58px）能放下表盘不被裁切。 */
     compact?: boolean;
+    /** 显示下方读数行（数值 + 指示灯）。极端矮窗口下隐藏只留表盘
+     *  （组件名已印于表盘内仍可辨识），省出读数行高度（M2.4 动态适配）。 */
+    readout?: boolean;
   } = $props();
 
   const v = $derived(value === null ? 0 : Math.min(100, Math.max(0, value)));
@@ -128,10 +131,12 @@
     <!-- 标签印在表盘内（hub 下方，弧底部开口处空白；紧凑模式省掉独立行的高度） -->
     <text x={cx} y={cy + size * 0.07} class="gauge-label" text-anchor="middle">{label}</text>
   </svg>
-  <div class="readout">
-    <span class="value" class:alarmed>{value === null ? "—" : `${v.toFixed(0)}%`}</span>
-    <span class="light" class:alarmed title={alarmed ? "占用偏高" : "正常"}></span>
-  </div>
+  {#if readout}
+    <div class="readout">
+      <span class="value" class:alarmed>{value === null ? "—" : `${v.toFixed(0)}%`}</span>
+      <span class="light" class:alarmed title={alarmed ? "占用偏高" : "正常"}></span>
+    </div>
+  {/if}
   {#if detail}
     <span class="detail">{detail}</span>
   {/if}

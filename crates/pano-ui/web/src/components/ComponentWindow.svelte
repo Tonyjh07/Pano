@@ -230,6 +230,11 @@
   }
   main {
     flex: 1;
+    /* 关键：flex 子项默认 min-height:auto，内容会把 main 撑开，导致
+       ResizeObserver 测到的是内容高度（~500px）而非可视高度——小屏
+       紧凑布局永不触发（用户实测 400×100 仍显示 2×2 的根因）。
+       允许收缩后 main 高度 = 窗口可视高度，SysDashboard 的紧凑判定才真实。 */
+    min-height: 0;
     overflow: auto;
     padding: 10px;
     display: flex;

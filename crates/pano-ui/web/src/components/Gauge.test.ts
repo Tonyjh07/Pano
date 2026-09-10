@@ -66,6 +66,21 @@ describe("Gauge", () => {
     expect(normal.querySelector(".gauge.compact")).toBeNull();
   });
 
+  it("hides the readout row when readout=false (极端矮窗口，M2.4 动态适配)", () => {
+    const { container } = render(Gauge, {
+      props: { value: 50, threshold: 80, label: "CPU", size: 36, compact: true, readout: false },
+    });
+    expect(container.querySelector(".readout")).toBeNull();
+    // 表盘与组件名仍在（组件名已印于表盘内，可辨识）
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(container.textContent).toContain("CPU");
+    // 默认 readout=true → 读数行显示
+    const { container: withReadout } = render(Gauge, {
+      props: { value: 50, threshold: 80, label: "CPU", size: 100 },
+    });
+    expect(withReadout.querySelector(".readout")).not.toBeNull();
+  });
+
   it("draws a 240° arc from -120° to +120° (12 o'clock zero, clockwise, M2.4)", () => {
     const { container } = render(Gauge, {
       props: { value: 0, threshold: 80, label: "x" },
